@@ -378,7 +378,7 @@ main() {
     if [ "$EUID" -ne 0 ]; then 
         log "ERROR" "请使用root权限运行此脚本"
         exit 1
-    }
+    fi
     
     # 添加信号处理
     trap 'echo -e "\n${RED}程序被中断${NC}"; exit 1' INT TERM
