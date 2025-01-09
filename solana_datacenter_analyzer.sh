@@ -314,8 +314,8 @@ main() {
                 echo -e "\n${BLUE}=== 开始初始化和完整分析 ===${NC}"
                 check_environment
                 install_requirements
-                analyze_validators
-                echo -e "\n${GREEN}分析完成！${NC}"
+                analyze_validators &
+                echo -e "${GREEN}分析任务已在后台运行！${NC}"
                 ;;
             2) 
                 if [ ! -f "/tmp/validator_analysis.txt" ]; then
@@ -375,4 +375,4 @@ main() {
 }
 
 # 启动程序
-main &  # 在后台运行主函数
+main  # 在前台运行主函数
