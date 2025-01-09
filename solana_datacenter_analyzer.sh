@@ -466,8 +466,10 @@ main() {
 show_menu() {
     clear
     echo -e "${BLUE}=== Solana 验证者节点分析工具 ===${NC}"
-    echo -e "${YELLOW}1.${NC} 显示所有验证者节点清单"
-    echo -e "${YELLOW}2.${NC} 运行延迟分析"
+    echo -e "${YELLOW}【首次使用请先选择 1 进行初始化和完整分析】${NC}"
+    echo
+    echo -e "${YELLOW}1.${NC} 运行完整分析 (包含初始化和依赖安装)"
+    echo -e "${YELLOW}2.${NC} 显示所有验证者节点清单"
     echo -e "${YELLOW}3.${NC} 查看最近的分析结果"
     echo -e "${YELLOW}4.${NC} 查看特定IP的详细信息"
     echo -e "${YELLOW}5.${NC} 导出分析报告"
@@ -480,9 +482,83 @@ show_menu() {
         echo -e "${GREEN}✓${NC} 已有分析结果"
         echo -e "   └─ 最后分析时间: $(stat -c %y /tmp/validator_analysis.txt | cut -d. -f1)"
     else
-        echo -e "${RED}✗${NC} 暂无分析结果"
+        echo -e "${RED}✗${NC} 暂无分析结果 ${YELLOW}请先选择选项 1 运行完整分析${NC}"
     fi
     echo
+}
+
+# 主函数
+main() {
+    while true; do
+        show_menu
+        read -p "请选择功能 (0-7): " choice
+        case $choice in
+            1) 
+                echo -e "\n${BLUE}=== 开始初始化和完整分析 ===${NC}"
+                # 检查环境
+                check_environment
+                # 获取本机信息
+                get_local_info
+                # 安装必要工具
+                install_requirements
+                # 分析验证者节点
+                analyze_validators
+                ;;
+            2) 
+                if [ ! -f "/tmp/validator_analysis.txt" ]; then
+                    echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
+                else
+                    show_validators_list
+                fi
+                ;;
+            3) 
+                if [ ! -f "/tmp/validator_analysis.txt" ]; then
+                    echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
+                else
+                    echo -e "\n${BLUE}=== 分析结果 ===${NC}"
+                    less "/tmp/validator_analysis.txt"
+                fi
+                ;;
+            4)
+                if [ ! -f "/tmp/validator_analysis.txt" ]; then
+                    echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
+                else
+                    read -p "请输入要查看的IP地址: " ip
+                    grep "^$ip" "/tmp/validator_analysis.txt" | less
+                fi
+                ;;
+            5) 
+                if [ ! -f "/tmp/validator_analysis.txt" ]; then
+                    echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
+                else
+                    local report_file="$HOME/solana_analysis_$(date +%Y%m%d_%H%M%S).txt"
+                    cp /tmp/validator_analysis.txt "$report_file"
+                    echo "报告已导出到: $report_file"
+                fi
+                ;;
+            6) check_environment ;;
+            7)
+                echo -e "${BLUE}=== 帮助信息 ===${NC}"
+                echo -e "${YELLOW}首次使用必须先运行选项 1 进行初始化和完整分析！${NC}"
+                echo
+                echo "1. 运行完整分析: 初始化系统并进行完整的延迟测试"
+                echo "2. 显示验证者清单: 列出所有活跃的验证者节点"
+                echo "3. 查看分析结果: 显示最近一次的分析结果"
+                echo "4. 查看IP详情: 查看特定IP的详细信息"
+                echo "5. 导出报告: 将分析结果导出到文件"
+                echo "6. 环境检查: 检查系统运行环境"
+                echo "0. 退出程序"
+                ;;
+            0) 
+                echo "感谢使用！"
+                exit 0
+                ;;
+            *) echo "无效选择" ;;
+        esac
+        
+        echo -e "\n按回车键继续..."
+        read
+    done
 }
 
 # 显示验证者清单
@@ -581,5 +657,3 @@ main() {
     done
 }
 
-# 运行主函数
-main
