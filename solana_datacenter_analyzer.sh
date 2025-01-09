@@ -65,6 +65,12 @@ DC_ICON="🏢"
 NETWORK_ICON="🌐"
 LATENCY_ICON="⚡"
 
+# 日志文件
+LOG_FILE="/tmp/solana_analysis.log"
+
+# 将输出重定向到日志文件
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 # 检查运行环境
 check_environment() {
     echo -e "${BLUE}=== 正在检查运行环境 ===${NC}"
@@ -392,4 +398,4 @@ menu_main() {
 }
 
 # 启动程序
-menu_main
+main &  # 在后台运行主函数
