@@ -293,8 +293,6 @@ analyze_validators() {
 show_menu() {
     clear
     echo -e "${BLUE}=== Solana 验证者节点分析工具 ===${NC}"
-    echo -e "${YELLOW}【首次使用请先选择 1 进行初始化和完整分析】${NC}"
-    echo
     echo -e "${YELLOW}1.${NC} 运行完整分析 (包含初始化和依赖安装)"
     echo -e "${YELLOW}2.${NC} 显示所有验证者节点清单"
     echo -e "${YELLOW}3.${NC} 查看最近的分析结果"
@@ -304,47 +302,26 @@ show_menu() {
     echo -e "${YELLOW}7.${NC} 查看帮助信息"
     echo -e "${YELLOW}0.${NC} 退出"
     echo
-    echo -e "当前状态:"
-    if [ -f "/tmp/validator_analysis.txt" ]; then
-        echo -e "${GREEN}✓${NC} 已有分析结果"
-        echo -e "   └─ 最后分析时间: $(stat -c %y /tmp/validator_analysis.txt | cut -d. -f1)"
-    else
-        echo -e "${RED}✗${NC} 暂无分析结果 ${YELLOW}请先选择选项 1 运行完整分析${NC}"
-    fi
-    echo
 }
 
 # 主函数
 main() {
-    echo -e "${BLUE}=== 开始 Solana 验证者节点部署分析 ===${NC}"
-    
-    check_environment
-    install_requirements
-    analyze_validators
-    
-    echo -e "\n${GREEN}分析完成！${NC}"
-    echo -e "${INFO_ICON} 详细分析结果已保存到 /tmp/validator_analysis.txt"
-    echo -e "${INFO_ICON} 完整报告已保存到 /tmp/validator_deployment_report.txt"
-    
-    echo -e "\n${BLUE}=== 分析结果 ===${NC}"
-    cat "/tmp/validator_analysis.txt"
-}
-
-# 主菜单函数
-menu_main() {
     while true; do
         show_menu
         read -p "请选择功能 (0-7): " choice
         case $choice in
             1) 
                 echo -e "\n${BLUE}=== 开始初始化和完整分析 ===${NC}"
-                main
+                check_environment
+                install_requirements
+                analyze_validators
+                echo -e "\n${GREEN}分析完成！${NC}"
                 ;;
             2) 
                 if [ ! -f "/tmp/validator_analysis.txt" ]; then
                     echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
                 else
-                    show_validators_list
+                    cat /tmp/validator_analysis.txt
                 fi
                 ;;
             3) 
@@ -352,7 +329,7 @@ menu_main() {
                     echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
                 else
                     echo -e "\n${BLUE}=== 分析结果 ===${NC}"
-                    cat "/tmp/validator_analysis.txt"
+                    cat /tmp/validator_analysis.txt
                 fi
                 ;;
             4)
@@ -398,4 +375,4 @@ menu_main() {
 }
 
 # 启动程序
-main   # 在后台运行主函数
+main &  # 在后台运行主函数
