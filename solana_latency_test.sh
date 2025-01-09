@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 启用严格模式
+set -euo pipefail
+
 # 颜色定义
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -21,9 +24,12 @@ REPORT_DIR="$HOME/solana_reports"
 LATEST_REPORT="${REPORT_DIR}/latest_report.txt"
 BACKGROUND_LOG="${REPORT_DIR}/background.log"
 LOCK_FILE="/tmp/solana_dc_finder.lock"
+BACKUP_DIR="${REPORT_DIR}/backups"
+BACKUP_FILE="${BACKUP_DIR}/latest_analysis.bak"
+VERSION="v1.2.3"
 
 # 创建必要的目录
-mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
+mkdir -p "${TEMP_DIR}" "${REPORT_DIR}" "${BACKUP_DIR}"
 
 # 日志函数
 log() {
@@ -31,12 +37,19 @@ log() {
     shift
     local message="$*"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo -e "${timestamp} [${level}] ${message}" >> "${LOG_FILE}"
+    local line_info=""
+    
+    if [ "$level" = "ERROR" ]; then
+        line_info=" (行号: ${BASH_LINENO[0]})"
+    fi
+    
+    echo -e "${timestamp} [${level}]${line_info} ${message}" >> "${LOG_FILE}"
     
     case "$level" in
-        "INFO")  echo -e "${BLUE}${INFO} ${message}${NC}" ;;
-        "ERROR") echo -e "${RED}${ERROR} ${message}${NC}" ;;
+        "INFO")    echo -e "${BLUE}${INFO} ${message}${NC}" ;;
+        "ERROR")   echo -e "${RED}${ERROR} ${message}${line_info}${NC}" ;;
         "SUCCESS") echo -e "${GREEN}${SUCCESS} ${message}${NC}" ;;
+        "WARN")    echo -e "${YELLOW}${WARN} ${message}${NC}" ;;
         *) echo -e "${message}" ;;
     esac
 }
@@ -45,6 +58,24 @@ log() {
 cleanup() {
     rm -f "$LOCK_FILE"
     log "INFO" "清理完成"
+}
+
+# 备份函数
+backup_data() {
+    if [ -f "${RESULTS_FILE}" ]; then
+        cp "${RESULTS_FILE}" "${BACKUP_FILE}"
+        log "INFO" "数据已备份到 ${BACKUP_FILE}"
+    fi
+}
+
+# 恢复函数
+restore_data() {
+    if [ -f "${BACKUP_FILE}" ]; then
+        cp "${BACKUP_FILE}" "${RESULTS_FILE}"
+        log "INFO" "已从备份恢复数据"
+        return 0
+    fi
+    return 1
 }
 
 # 检查依赖
@@ -111,18 +142,30 @@ test_network_quality() {
     local count=5
     local interval=0.2
     local timeout=1
+    local retries=3
     
-    local result=$(ping -c $count -i $interval -W $timeout "$ip" 2>/dev/null)
-    if [ $? -eq 0 ]; then
-        local stats=$(echo "$result" | tail -1)
-        local min=$(echo "$stats" | awk -F'/' '{print $4}')
-        local avg=$(echo "$stats" | awk -F'/' '{print $5}')
-        local max=$(echo "$stats" | awk -F'/' '{print $6}')
-        local loss=$(echo "$result" | grep -oP '\d+(?=% packet loss)')
-        echo "$min|$avg|$max|$loss"
-    else
-        echo "timeout|timeout|timeout|100"
-    fi
+    for ((i=1; i<=retries; i++)); do
+        local result=$(ping -c $count -i $interval -W $timeout "$ip" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            local stats=$(echo "$result" | tail -1)
+            local min=$(echo "$stats" | awk -F'/' '{print $4}')
+            local avg=$(echo "$stats" | awk -F'/' '{print $5}')
+            local max=$(echo "$stats" | awk -F'/' '{print $6}')
+            local loss=$(echo "$result" | grep -oP '\d+(?=% packet loss)')
+            
+            if [[ "$min" =~ ^[0-9]+(\.[0-9]+)?$ ]] && \
+               [[ "$avg" =~ ^[0-9]+(\.[0-9]+)?$ ]] && \
+               [[ "$max" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                echo "$min|$avg|$max|$loss"
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+    
+    log "WARN" "无法测试 IP ${ip} 的网络质量"
+    echo "timeout|timeout|timeout|100"
+    return 1
 }
 
 # 识别数据中心
@@ -170,6 +213,180 @@ get_validators() {
     return 0
 }
 
+# 生成报告
+generate_report() {
+    local report_file=$1
+    local total_nodes=$(wc -l < "${RESULTS_FILE}")
+    
+    {
+        echo "# Solana 验证者节点分布报告"
+        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "分析节点总数: ${total_nodes}"
+        echo
+        
+        echo "## 数据中心分布 (Top 10)"
+        echo "| 数据中心 | 节点数量 | 占比 |"
+        echo "|----------|----------|------|"
+        
+        awk -F'|' -v total="$total_nodes" '
+            {dc[$2]++}
+            END {
+                for (d in dc) {
+                    percentage = dc[d] / total * 100
+                    printf "| %-30s | %4d | %.1f%% |\n", d, dc[d], percentage
+                }
+            }
+        ' "${RESULTS_FILE}" | sort -rn -k4 | head -10
+        
+        echo
+        echo "## 地理分布 (Top 10)"
+        echo "| 地区 | 节点数量 | 占比 |"
+        echo "|------|----------|------|"
+        
+        awk -F'|' -v total="$total_nodes" '
+            {loc[$3]++}
+            END {
+                for (l in loc) {
+                    percentage = loc[l] / total * 100
+                    printf "| %-30s | %4d | %.1f%% |\n", l, loc[l], percentage
+                }
+            }
+        ' "${RESULTS_FILE}" | sort -rn -k4 | head -10
+        
+        echo
+        echo "## 网络质量统计"
+        echo "- 最低延迟: $(awk -F'|' '$4!="timeout" {print $4}' "${RESULTS_FILE}" | sort -n | head -1) ms"
+        echo "- 最高延迟: $(awk -F'|' '$4!="timeout" {print $4}' "${RESULTS_FILE}" | sort -n | tail -1) ms"
+        echo "- 平均延迟: $(awk -F'|' '$4!="timeout" {sum+=$4; count++} END {printf "%.2f", sum/count}' "${RESULTS_FILE}") ms"
+        echo "- 超时比例: $(awk -F'|' '$4=="timeout" {count++} END {printf "%.1f%%", count/NR*100}' "${RESULTS_FILE}")"
+        
+        # 添加延迟分布统计
+        echo
+        echo "## 延迟分布"
+        echo "| 延迟范围 | 节点数量 | 占比 |"
+        echo "|----------|----------|------|"
+        
+        awk -F'|' -v total="$total_nodes" '
+            $4!="timeout" {
+                if ($4 < 50) range["<50ms"]++
+                else if ($4 < 100) range["50-100ms"]++
+                else if ($4 < 200) range["100-200ms"]++
+                else if ($4 < 300) range["200-300ms"]++
+                else range[">300ms"]++
+            }
+            END {
+                for (r in range) {
+                    percentage = range[r] / total * 100
+                    printf "| %-10s | %8d | %5.1f%% |\n", r, range[r], percentage
+                }
+            }
+        ' "${RESULTS_FILE}" | sort -t'|' -k1
+
+                echo
+        echo "## 部署建议"
+        echo "1. 优选部署区域："
+        
+        # 获取最佳部署区域
+        local best_regions=$(awk -F'|' '
+            $4!="timeout" {
+                loc[$3] += 1
+                latency[$3] += $4
+                if (!min_latency[$3] || $4 < min_latency[$3]) min_latency[$3] = $4
+            }
+            END {
+                for (l in loc) {
+                    avg = latency[l] / loc[l]
+                    printf "%s|%d|%.2f|%.2f\n", l, loc[l], avg, min_latency[l]
+                }
+            }
+        ' "${RESULTS_FILE}" | sort -t'|' -k3n | head -3)
+        
+        echo "   - 主要区域：$(echo "$best_regions" | head -1 | cut -d'|' -f1)"
+        echo "   - 备选区域：$(echo "$best_regions" | tail -n +2 | cut -d'|' -f1 | tr '\n' '、')"
+        
+        echo
+        echo "2. 推荐数据中心："
+        local best_dcs=$(awk -F'|' '
+            $4!="timeout" {
+                dc[$2] += 1
+                if (!min_latency[$2] || $4 < min_latency[$2]) min_latency[$2] = $4
+            }
+            END {
+                for (d in dc) {
+                    printf "%s|%d|%.2f\n", d, dc[d], min_latency[d]
+                }
+            }
+        ' "${RESULTS_FILE}" | sort -t'|' -k3n | head -3)
+        
+        while IFS='|' read -r dc count latency; do
+            echo "   - $dc"
+        done <<< "$best_dcs"
+        
+        echo
+        echo "3. 网络要求："
+        echo "   - 建议选择延迟<50ms的区域"
+        echo "   - 确保带宽≥1Gbps"
+        echo "   - 建议配置冗余网络链路"
+        
+        echo
+        echo "4. 高可用性建议："
+        echo "   - 主节点：部署在最优延迟区域"
+        echo "   - 备份节点：部署在次优区域"
+        echo "   - 建议采用多区域部署策略"
+        
+        echo
+        echo "## 风险提示"
+        echo "1. 集中度风险："
+        local max_dc_percentage=$(awk -F'|' -v total="$total_nodes" '
+            {dc[$2]++}
+            END {
+                max_p = 0
+                for (d in dc) {
+                    p = dc[d] / total * 100
+                    if (p > max_p) max_p = p
+                }
+                printf "%.1f", max_p
+            }
+        ' "${RESULTS_FILE}")
+        
+        echo "   - 最大数据中心占比 ${max_dc_percentage}%"
+        echo "   - 建议考虑地理分散部署"
+        
+        echo
+        echo "2. 网络风险："
+        echo "   - $(awk -F'|' '$4=="timeout" {count++} END {printf "%.1f%%", count/NR*100}' "${RESULTS_FILE}")的节点存在连接性问题"
+        echo "   - 建议避免部署在高延迟区域"
+        
+        echo
+        echo "3. 成本考虑："
+        echo "   - 主流云服务商成本较高，可考虑其他性价比方案"
+        echo "   - 建议预留 50% 带宽余量"
+        
+        echo
+        echo "## 监控建议"
+        echo "1. 关键指标："
+        echo "   - 网络延迟"
+        echo "   - 投票性能"
+        echo "   - 系统资源使用率"
+        echo "   - 节点同步状态"
+        
+        echo
+        echo "2. 告警阈值："
+        echo "   - 延迟 > 100ms"
+        echo "   - 丢包率 > 1%"
+        echo "   - CPU 使用率 > 80%"
+        echo "   - 内存使用率 > 85%"
+        
+        echo
+        echo "---"
+        echo "报告生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "分析工具版本: ${VERSION}"
+        
+    } > "$report_file"
+    
+    log "SUCCESS" "报告已生成: $report_file"
+}
+
 # 后台运行分析
 run_background_analysis() {
     if [ -f "$LOCK_FILE" ]; then
@@ -186,9 +403,10 @@ run_background_analysis() {
         
         local timestamp=$(date +%Y%m%d_%H%M%S)
         local report_file="${REPORT_DIR}/report_${timestamp}.txt"
-        generate_report > "${report_file}"
+        generate_report "${report_file}"
         
         ln -sf "${report_file}" "${LATEST_REPORT}"
+        backup_data
         
         echo "分析完成 - $(date)" >> "${BACKGROUND_LOG}"
         rm -f "$LOCK_FILE"
@@ -202,64 +420,6 @@ run_background_analysis() {
     echo "3. 在报告管理中选择'5'查看任务状态"
     echo -e "\n按回车键返回主菜单..."
     read
-}
-
-# 报告管理
-manage_reports() {
-    while true; do
-        clear
-        echo -e "\n${BLUE}报告管理${NC}"
-        echo "=================================="
-        echo "1. 查看最新报告"
-        echo "2. 列出所有报告"
-        echo "3. 查看指定报告"
-        echo "4. 删除旧报告"
-        echo "5. 查看后台任务状态"
-        echo "0. 返回主菜单"
-        echo "=================================="
-        
-        read -p "请选择操作 [0-5]: " report_choice
-        case $report_choice in
-            1) if [ -f "${LATEST_REPORT}" ]; then
-                   clear
-                   cat "${LATEST_REPORT}"
-                   read -p "按回车键继续..."
-               else
-                   log "ERROR" "没有找到最新报告"
-                   sleep 2
-               fi ;;
-            2) echo -e "\n可用报告列表："
-               ls -lh "${REPORT_DIR}"/report_*.txt 2>/dev/null | \
-                   awk '{print NR". " $9 " (" $5 ")" }'
-               read -p "按回车键继续..." ;;
-            3) ls -1 "${REPORT_DIR}"/report_*.txt 2>/dev/null | \
-                   awk '{print NR". " $0}'
-               read -p "请输入报告编号: " report_num
-               local report_file=$(ls -1 "${REPORT_DIR}"/report_*.txt 2>/dev/null | \
-                   sed -n "${report_num}p")
-               if [ -f "${report_file}" ]; then
-                   clear
-                   cat "${report_file}"
-                   read -p "按回车键继续..."
-               else
-                   log "ERROR" "无效的报告编号"
-                   sleep 2
-               fi ;;
-            4) find "${REPORT_DIR}" -name "report_*.txt" -mtime +7 -delete
-               log "SUCCESS" "已删除7天前的报告"
-               sleep 2 ;;
-            5) if [ -f "$LOCK_FILE" ]; then
-                   echo "后台分析正在运行"
-                   tail -n 10 "${BACKGROUND_LOG}"
-               else
-                   echo "没有正在运行的后台分析任务"
-               fi
-               read -p "按回车键继续..." ;;
-            0) return ;;
-            *) log "ERROR" "无效选择"
-               sleep 1 ;;
-        esac
-    done
 }
 
 # 分析验证者节点
@@ -295,87 +455,7 @@ analyze_validators() {
     
     echo -e "\n"
     log "SUCCESS" "分析完成"
-    generate_report
-}
-
-# 生成报告
-generate_report() {
-    echo -e "\n${BLUE}=== Solana 验证者节点分布报告 ===${NC}"
-    echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')"
-    echo "------------------------------------------------"
-    
-    # 数据中心分布统计
-    echo -e "\n${YELLOW}数据中心分布${NC}"
-    echo "------------------------------------------------"
-    awk -F'|' '{print $2}' "${RESULTS_FILE}" | sort | uniq -c | sort -rn | head -10 | while read count dc; do
-        printf "%-40s : %3d 个节点\n" "$dc" "$count"
-    done
-    
-    # 最优部署位置
-    echo -e "\n${GREEN}最优部署位置 (按延迟排序)${NC}"
-    echo "------------------------------------------------"
-    printf "%-15s %-30s %-30s %-10s\n" "IP地址" "数据中心" "位置" "延迟(ms)"
-    echo "------------------------------------------------"
-    
-    sort -t'|' -k4 -n "${RESULTS_FILE}" | head -10 | while IFS='|' read -r ip dc location latency; do
-        if [ "$latency" != "timeout" ]; then
-            printf "%-15s %-30s %-30s %-10.2f\n" "$ip" "$dc" "$location" "$latency"
-        fi
-    done
-    
-    # 部署建议
-    echo -e "\n${BLUE}部署建议${NC}"
-    echo "------------------------------------------------"
-    
-    # 找出最集中的数据中心
-    local top_dc=$(awk -F'|' '{print $2}' "${RESULTS_FILE}" | sort | uniq -c | sort -rn | head -1)
-    local dc_name=$(echo "$top_dc" | awk '{$1=""; print $0}' | xargs)
-    local dc_count=$(echo "$top_dc" | awk '{print $1}')
-    
-    echo "1. 主要验证者集群："
-    echo "   - 数据中心: $dc_name"
-    echo "   - 验证者数量: $dc_count"
-    
-    # 该数据中心的最佳节点
-    local best_node=$(grep "$dc_name" "${RESULTS_FILE}" | sort -t'|' -k4 -n | head -1)
-    local best_ip=$(echo "$best_node" | cut -d'|' -f1)
-    local best_latency=$(echo "$best_node" | cut -d'|' -f4)
-    
-    echo -e "\n2. 推荐部署位置："
-    echo "   - 优选数据中心: $dc_name"
-    echo "   - 参考节点: $best_ip"
-    echo "   - 预期延迟: ${best_latency}ms"
-    
-    echo -e "\n3. 部署建议："
-    echo "   - 建议优先在 $dc_name 寻找机位"
-    echo "   - 确保与参考节点 $best_ip 在同一网段"
-    echo "   - 建议部署前进行多次延迟测试"
-    echo "   - 考虑在次优数据中心部署备份节点"
-    
-    # 添加延迟统计
-    echo -e "\n4. 延迟统计："
-    echo "   - 平均延迟: $(awk -F'|' '$4!="timeout" {sum+=$4; count++} END {printf "%.2f", sum/count}' "${RESULTS_FILE}")ms"
-    echo "   - 最低延迟: $(sort -t'|' -k4 -n "${RESULTS_FILE}" | head -1 | cut -d'|' -f4)ms"
-    
-    # 添加地理分布
-    echo -e "\n5. 地理分布："
-    awk -F'|' '{print $3}' "${RESULTS_FILE}" | sort | uniq -c | sort -rn | head -5 | while read count location; do
-        echo "   - $location: $count 个节点"
-    done
-}
-
-# 显示主菜单
-show_menu() {
-    clear
-    echo -e "\n${BLUE}Solana 验证者节点位置分析工具${NC}"
-    echo "=================================="
-    echo "1. 开始分析验证者节点分布"
-    echo "2. 在后台运行分析"
-    echo "3. 报告管理"
-    echo "4. 测试指定IP的数据中心位置"
-    echo "0. 退出"
-    echo "=================================="
-    echo -ne "请选择操作 [0-4]: "
+    generate_report "${LATEST_REPORT}"
 }
 
 # 主函数
@@ -387,7 +467,7 @@ main() {
     fi
     
     # 添加信号处理
-    trap 'echo -e "\n${RED}程序被中断${NC}"; exit 1' INT TERM
+    trap 'echo -e "\n${RED}程序被中断${NC}"; cleanup; exit 1' INT TERM
     trap cleanup EXIT
     
     # 检查是否已在运行
@@ -403,9 +483,18 @@ main() {
     install_solana_cli || exit 1
     
     while true; do
-        show_menu
-        read choice
+        clear
+        echo -e "\n${BLUE}Solana 验证者节点位置分析工具 ${VERSION}${NC}"
+        echo "=================================="
+        echo "1. 开始分析验证者节点分布"
+        echo "2. 在后台运行分析"
+        echo "3. 报告管理"
+        echo "4. 测试指定IP的数据中心位置"
+        echo "0. 退出"
+        echo "=================================="
+        echo -ne "请选择操作 [0-4]: "
         
+        read choice
         case $choice in
             1) analyze_validators ;;
             2) run_background_analysis ;;
@@ -414,6 +503,8 @@ main() {
                if [[ $test_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
                    dc_info=$(identify_datacenter "$test_ip")
                    echo -e "\n数据中心信息: $dc_info"
+                   network_stats=$(test_network_quality "$test_ip")
+                   echo "网络延迟: $(echo "$network_stats" | cut -d'|' -f2) ms"
                else
                    log "ERROR" "无效的IP地址"
                fi
