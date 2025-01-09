@@ -1,4 +1,4 @@
-# 修改脚本开头的参数处理部分
+#!/bin/bash
 
 # 启用严格模式
 set -euo pipefail
