@@ -71,8 +71,8 @@ LOG_FILE="/tmp/solana_analysis.log"
 # 将输出重定向到日志文件
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-# 检查运行环境
-check_environment() {
+# 检查运行环境并安装必要工具
+check_and_install_requirements() {
     echo -e "${BLUE}=== 正在检查运行环境 ===${NC}"
     local has_warning=false
     
@@ -127,10 +127,7 @@ check_environment() {
     else
         echo -e "${GREEN}✓ 系统环境检查通过${NC}"
     fi
-}
 
-# 安装必要工具
-install_requirements() {
     echo "正在安装必要工具..."
     apt-get update
     apt-get install -y curl mtr traceroute bc jq whois geoip-bin dnsutils hping3 iperf3
@@ -300,16 +297,57 @@ analyze_validators() {
         echo ""
         echo "详细分析结果已保存到: $results_file"
     } > "$report_file"
+
+    # 打印分析结果
+    echo -e "\n${BLUE}=== 分析结果已保存 ===${NC}"
+    cat "$results_file"
+}
+
+# 显示菜单
+show_menu() {
+    echo -e "${BLUE}=== Solana 验证者节点分析工具 ===${NC}"
+    echo "1. 检查环境并安装必要工具"
+    echo "2. 下载 Solana CLI"
+    echo "3. 分析验证者节点"
+    echo "4. 查看分析结果"
+    echo "5. 退出"
+    echo -n "请选择一个选项 [1-5]: "
 }
 
 # 主函数
 main() {
-    check_environment
-    install_requirements
-    download_solana_cli
-    analyze_validators
+    while true; do
+        show_menu
+        read -r choice
+        case $choice in
+            1)
+                check_and_install_requirements
+                ;;
+            2)
+                download_solana_cli
+                ;;
+            3)
+                analyze_validators &  # 在后台运行分析
+                disown  # 使后台进程与当前终端分离
+                ;;
+            4)
+                echo -e "${YELLOW}=== 分析结果 ===${NC}"
+                if [ -f "/tmp/validator_analysis.txt" ]; then
+                    cat /tmp/validator_analysis.txt
+                else
+                    echo -e "${RED}没有找到分析结果文件。请先进行分析。${NC}"
+                fi
+                ;;
+            5)
+                echo "退出程序。"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}无效选择，请重新输入。${NC}"
+                ;;
+        esac
+    done
 }
 
 # 启动程序
-main &  # 在后台运行主函数
-disown  # 使后台进程与当前终端分离
+main
