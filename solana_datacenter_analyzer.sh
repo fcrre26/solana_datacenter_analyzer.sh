@@ -429,37 +429,61 @@ analyze_validators() {
     } > "$report_file"
 }
 
-# 主函数
-main() {
-    echo "开始 Solana 验证者节点部署分析..."
-    
-    # 显示脚本说明
-    echo -e "${BLUE}=== Solana 验证者节点部署分析工具 ===${NC}"
-    echo -e "${YELLOW}专注于寻找超低延迟(≤1ms)部署位置${NC}"
-    echo -e "详细说明请查看脚本开头的注释\n"
-    
-    # 检查运行环境
-    check_environment
-    
-    # 询问是否继续
-    read -p "环境检查完成，是否继续？(y/n) " -n 1 -r
+# 显示主菜单
+show_menu() {
+    clear
+    echo -e "${BLUE}=== Solana 验证者节点分析工具 ===${NC}"
+    echo -e "${YELLOW}【首次使用请先选择 1 进行初始化和完整分析】${NC}"
     echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
+    echo -e "${YELLOW}1.${NC} 运行完整分析 (包含初始化和依赖安装)"
+    echo -e "${YELLOW}2.${NC} 显示所有验证者节点清单"
+    echo -e "${YELLOW}3.${NC} 查看最近的分析结果"
+    echo -e "${YELLOW}4.${NC} 查看特定IP的详细信息"
+    echo -e "${YELLOW}5.${NC} 导出分析报告"
+    echo -e "${YELLOW}6.${NC} 系统环境检查"
+    echo -e "${YELLOW}7.${NC} 查看帮助信息"
+    echo -e "${YELLOW}0.${NC} 退出"
+    echo
+    echo -e "当前状态:"
+    if [ -f "/tmp/validator_analysis.txt" ]; then
+        echo -e "${GREEN}✓${NC} 已有分析结果"
+        echo -e "   └─ 最后分析时间: $(stat -c %y /tmp/validator_analysis.txt | cut -d. -f1)"
+    else
+        echo -e "${RED}✗${NC} 暂无分析结果 ${YELLOW}请先选择选项 1 运行完整分析${NC}"
     fi
+    echo
+}
+
+# 显示验证者清单
+show_validators_list() {
+    echo -e "\n${BLUE}=== Solana 验证者节点清单 ===${NC}"
+    echo -e "正在获取验证者信息..."
     
-    # 获取本机信息
-    get_local_info
+    local validators=$(solana gossip --url https://api.mainnet-beta.solana.com 2>/dev/null)
+    local total=0
+    local output_file="/tmp/validators_list.txt"
     
-    # 安装必要工具
-    install_requirements
+    echo -e "IP地址            身份标识        投票账户        状态        版本" > "$output_file"
+    echo -e "----------------------------------------------------------------" >> "$output_file"
     
-    # 分析验证者节点
-    analyze_validators
+    echo "$validators" | while read -r line; do
+        if [[ $line =~ ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):([0-9]+)[[:space:]]+([A-Za-z0-9]+)[[:space:]]+([A-Za-z0-9]+) ]]; then
+            local ip="${BASH_REMATCH[1]}"
+            local port="${BASH_REMATCH[2]}"
+            local identity="${BASH_REMATCH[3]}"
+            local vote_account="${BASH_REMATCH[4]}"
+            local status="活跃"
+            local version=$(echo "$line" | grep -oP "version: \K[0-9\.]+")
+            
+            printf "%-15s %-14s %-14s %-10s %-8s\n" \
+                "$ip" "${identity:0:12}.." "${vote_account:0:12}.." "$status" "${version:-未知}" >> "$output_file"
+            ((total++))
+        fi
+    done
     
-    echo -e "\n${YELLOW}分析完成！请根据以上信息选择合适的部署位置。${NC}"
-    echo -e "${INFO_ICON} 详细分析结果已保存到 /tmp/validator_analysis.txt"
-    echo -e "${INFO_ICON} 完整报告已保存到 /tmp/validator_deployment_report.txt"
+    echo -e "\n共找到 $total 个验证者节点"
+    echo -e "按 q 退出查看\n"
+    less -R "$output_file"
 }
 
 # 主菜单函数
