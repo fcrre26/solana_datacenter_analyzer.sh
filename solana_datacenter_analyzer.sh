@@ -74,6 +74,18 @@ declare -A CLOUD_PROVIDERS=(
     ["Alibaba"]="https://raw.githubusercontent.com/alibaba/alibaba-cloud-ip-ranges/main/ip-ranges.json"
     ["Oracle"]="https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json"
     ["IBM"]="https://cloud.ibm.com/network-security/ip-ranges"
+    ["DigitalOcean"]="https://www.digitalocean.com/docs/networking/firewalls/how-to/firewall-ip-ranges/"
+    ["Linode"]="https://www.linode.com/docs/guides/linode-ip-addresses/"
+    ["Vultr"]="https://www.vultr.com/docs/vultr-ip-addresses"
+    ["Hetzner"]="https://www.hetzner.com/cloud"
+    ["OVH"]="https://www.ovh.com/world/support/documents/ovh-ip-ranges.xml"
+    ["Rackspace"]="https://docs.rackspace.com/support/how-to/rackspace-cloud-ip-addresses/"
+    ["Tencent Cloud"]="https://cloud.tencent.com/document/product/213/15728"
+    ["Huawei Cloud"]="https://support.huaweicloud.com/intl/en-us/faq-ecs/ecs_01_0001.html"
+    ["Scaleway"]="https://www.scaleway.com/en/docs/ip-ranges/"
+    ["Alibaba Cloud Hong Kong"]="https://www.alibabacloud.com/help/doc-detail/254001.htm"
+    ["Google Cloud Platform (GCP)"]="https://cloud.google.com/compute/docs/faq#find_ip_range"
+    ["Microsoft Azure"]="https://docs.microsoft.com/en-us/azure/virtual-network/ip-services/ip-addresses"
 )
 
 # 数据中心信息
@@ -240,15 +252,22 @@ analyze_validators() {
     > "$results_file"
 
     echo -e "\n${BLUE}=== 正在分析验证者节点部署情况 ===${NC}"
+
     echo -e "特别关注延迟低于1ms的节点...\n"
     
+
     local total_validators=0
     local low_latency_count=0
 
+
     # 打印所有节点的 IP 列表并进行 ping 测试
     echo -e "${YELLOW}=== 所有验证者节点 IP 列表及 Ping 测试结果 ===${NC}"
-    echo -e "IP地址            机房/提供商        Ping结果"
-    echo -e "-----------------------------------------------"
+    printf "+------------------+---------------------+--------------------------------------+---------------------------------------------+\n"
+
+    printf "| %-16s | %-19s | %-36s | %-45s |\n" "IP地址" "Ping 测试（ms）" "机房/提供商信息" "IP范围"
+
+    printf "+------------------+---------------------+--------------------------------------+---------------------------------------------+\n"
+
 
     echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | while read -r ip; do
         local datacenter_info=$(get_datacenter_info "$ip")
@@ -256,131 +275,211 @@ analyze_validators() {
         if [ -z "$ping_result" ]; then
             ping_result="无响应"
         fi
-        printf "%-15s %-20s %s\n" "$ip" "$datacenter_info" "$ping_result"
+
+        printf "| %-16s | %-19s | %-36s | %-45s |\n" "$ip" "$ping_result" "$datacenter_info"
+
     done
 
+    printf "+------------------+---------------------+--------------------------------------+---------------------------------------------+\n"
+
     echo -e "\n${YELLOW}=== 开始详细延迟测试 ===${NC}"
+
 
     # 重新获取 IP 列表以进行详细测试
     echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | while read -r ip; do
         echo -e "${YELLOW}分析节点: $ip${NC}"
         
+
         local connection_info
         connection_info=$(test_connection "$ip")
+
         if [ -z "$connection_info" ]; then
             echo -e "${RED}无法测试连接到 $ip，跳过此节点。${NC}"
             continue
         fi
         
+
         local min_latency=$(echo "$connection_info" | cut -d'|' -f1)
+
         local avg_latency=$(echo "$connection_info" | cut -d'|' -f2)
+
         local jitter=$(echo "$connection_info" | cut -d'|' -f3)
         local mtr_latency=$(echo "$connection_info" | cut -d'|' -f4)
+
         local hop_count=$(echo "$connection_info" | cut -d'|' -f5)
+
         
+
         # 记录结果
         echo "$ip|$min_latency|$avg_latency|$jitter|$mtr_latency|$hop_count" >> "$results_file"
+
         ((total_validators++))
         
         # 实时显示低延迟节点
+
         if (( $(echo "$min_latency <= 1" | bc -l) )); then
+
             ((low_latency_count++))
+
             echo -e "${GREEN}发现低延迟节点！${NC}"
+
             echo -e "IP: $ip"
+
             echo -e "最小延迟: ${min_latency}ms"
+
             echo -e "平均延迟: ${avg_latency}ms"
+
             echo -e "抖动: ${jitter}ms"
+
             echo -e "跳数: $hop_count"
+
         fi
+
     done
 
+
     # 显示低延迟节点详细信息
+
     echo -e "\n${BLUE}=== 低延迟验证者节点 (≤1ms) ===${NC}"
+
     echo -e "IP地址            延迟(ms)    平均(ms)   抖动(ms)   提供商        数据中心"
     echo -e "   └─ 延迟精确到0.001ms"
+
     echo -e "------------------------------------------------------------------------"
+
 
     sort -t'|' -k2 -n "$results_file" | while IFS='|' read -r ip min_lat avg_lat jitter mtr_lat hops; do
         if (( $(echo "$min_lat <= 1" | bc -l) )); then
             printf "${GREEN}%-15s %8.3f %8.3f %8.3f${NC}\n" "$ip" "$min_lat" "$avg_lat" "$jitter"
             echo -e "  └─ 跳数: $hops"
+
         fi
+
     done
 
+
     # 生成建议
+
     echo -e "\n${YELLOW}=== 部署建议 ===${NC}"
+
     echo -e "要达到1ms以内的延迟，建议："
     echo -e "1. ${CHECK_ICON} 选择与验证者节点相同的数据中心"
+
     echo -e "2. ${CHECK_ICON} 如果选择不同数据中心，确保："
+
     echo -e "   └─ 在同一园区内"
+
     echo -e "   └─ 使用同一个网络服务商"
+
     echo -e "   └─ 通过专线或直连方式连接"
+
     echo -e "3. ${CHECK_ICON} 网络配置建议："
     echo -e "   └─ 使用10Gbps+网络接口"
+
     echo -e "   └─ 开启网卡优化（TSO, GSO, GRO）"
     echo -e "   └─ 使用TCP BBR拥塞控制"
+
     echo -e "   └─ 调整系统网络参数"
     
     local report_file="/tmp/validator_deployment_report.txt"
+
     {
+
         echo "=== Solana 验证者节点部署分析报告 ==="
+
         echo "生成时间: $(date)"
         echo "分析节点总数: $total_validators"
+
         echo "低延迟节点数(≤1ms): $low_latency_count"
+
         echo ""
         echo "详细分析结果已保存到: $results_file"
+
     } > "$report_file"
 
     # 打印分析结果
+
     echo -e "\n${BLUE}=== 分析结果已保存 ===${NC}"
+
     cat "$results_file"
 }
 
 # 显示菜单
 show_menu() {
+
     echo -e "${BLUE}=== Solana 验证者节点分析工具 ===${NC}"
+
     echo "1. 检查环境并安装必要工具"
+
     echo "2. 下载 Solana CLI"
+
     echo "3. 分析验证者节点"
+
     echo "4. 查看分析结果"
+
     echo "5. 退出"
     echo -n "请选择一个选项 [1-5]: "
 }
 
 # 主函数
+
 main() {
     while true; do
         show_menu
         read -r choice
+
         case $choice in
+
             1)
+
                 check_and_install_requirements
+
                 ;;
+
             2)
+
                 download_solana_cli
+
                 ;;
+
             3)
+
                 analyze_validators &  # 在后台运行分析
+
                 disown  # 使后台进程与当前终端分离
+
                 ;;
+
             4)
+
                 echo -e "${YELLOW}=== 分析结果 ===${NC}"
+
                 if [ -f "/tmp/validator_analysis.txt" ]; then
+
                     cat /tmp/validator_analysis.txt
+
                 else
                     echo -e "${RED}没有找到分析结果文件。请先进行分析。${NC}"
                 fi
+
                 ;;
+
             5)
                 echo "退出程序。"
                 exit 0
+
                 ;;
             *)
+
                 echo -e "${RED}无效选择，请重新输入。${NC}"
+
                 ;;
+
         esac
+
     done
 }
+
 
 # 启动程序
 main
