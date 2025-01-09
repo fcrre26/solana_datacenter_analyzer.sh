@@ -486,6 +486,27 @@ show_validators_list() {
     less -R "$output_file"
 }
 
+# 主函数
+main() {
+    echo -e "${BLUE}=== 开始 Solana 验证者节点部署分析 ===${NC}"
+    
+    # 检查运行环境
+    check_environment
+    
+    # 获取本机信息
+    get_local_info
+    
+    # 安装必要工具
+    install_requirements
+    
+    # 分析验证者节点
+    analyze_validators
+    
+    echo -e "\n${GREEN}分析完成！${NC}"
+    echo -e "${INFO_ICON} 详细分析结果已保存到 /tmp/validator_analysis.txt"
+    echo -e "${INFO_ICON} 完整报告已保存到 /tmp/validator_deployment_report.txt"
+}
+
 # 主菜单函数
 menu_main() {
     while true; do
