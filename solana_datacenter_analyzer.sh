@@ -255,6 +255,9 @@ analyze_validators() {
     local total_validators=0
     local low_latency_count=0
 
+    # 存储所有结果
+    declare -a results
+
     # 打印所有节点的 IP 列表并进行 ping 测试
     echo -e "${YELLOW}=== 所有验证者节点 IP 列表及 Ping 测试结果 ===${NC}"
     printf "+------------------+---------------------+--------------------------------------+---------------------------------------------+\n"
@@ -264,15 +267,22 @@ analyze_validators() {
     echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | while read -r ip; do
         local datacenter_info=$(get_datacenter_info "$ip")
         local ping_result=$(ping -c 1 -W 1 "$ip" | grep 'time=' | awk -F'=' '{print $4}' | cut -d' ' -f1)
+        
         if [ -z "$ping_result" ]; then
             ping_result="无响应"
         fi
 
         # 使用 fold 命令处理长字符串
         local formatted_datacenter_info=$(echo "$datacenter_info" | fold -s -w 36)
-        local formatted_ip_range=$(echo "$ip_range" | fold -s -w 45)
+        local formatted_ip_range=" "  # 这里可以根据需要填充 IP 范围
 
-        printf "| %-16s | %-19s | %-36s | %-45s |\n" "$ip" "$ping_result" "$formatted_datacenter_info" "$formatted_ip_range"
+        # 将结果存储到数组中
+        results+=("| $ip | $ping_result | $formatted_datacenter_info | $formatted_ip_range |")
+    done
+
+    # 打印所有结果
+    for result in "${results[@]}"; do
+        printf "%s\n" "$result"
     done
 
     printf "+------------------+---------------------+--------------------------------------+---------------------------------------------+\n"
