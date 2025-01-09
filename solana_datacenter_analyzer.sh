@@ -168,26 +168,6 @@ check_and_install_requirements() {
     apt-get install -y curl mtr traceroute bc jq whois geoip-bin dnsutils hping3 iperf3
 }
 
-# 确保 Solana CLI 的路径在 PATH 中
-export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
-
-# 下载 Solana CLI
-download_solana_cli() {
-    echo "下载 Solana CLI..."
-    sh -c "$(curl -sSfL https://release.solana.com/v1.18.15/install)"
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}错误: Solana CLI 下载失败，请检查网络连接。${NC}"
-        exit 1
-    fi
-    echo 'export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"' >> /root/.bashrc
-    export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
-    source /root/.bashrc
-    solana --version || {
-        echo -e "${RED}错误: Solana CLI 安装后未能正确识别，请检查安装。${NC}"
-        exit 1
-    }
-}
-
 # 获取机房和提供商信息
 get_datacenter_info() {
     local ip=$1
@@ -196,42 +176,46 @@ get_datacenter_info() {
     
     # 提取 IP 范围
     local net_range=$(whois "$ip" | grep -E 'NetRange|CIDR' | tr '\n' ' ')
-    
-    echo "$info | $net_range"
+    echo "$info $net_range"
 }
 
-# 测试连接
-test_connection() {
+# 简单的 ping 测试
+simple_ping_test() {
     local ip=$1
-
-    # 使用 ping 测试延迟
-    local ping_result=$(ping -c 5 -W 1 "$ip")
-    if [ $? -ne 0 ]; then
-        echo "无法连接到 $ip"
-        return
-    fi
-
-    # 提取最小、平均和最大延迟
-    local min_latency=$(echo "$ping_result" | grep 'min/avg/max' | awk -F'/' '{print $4}')
-    local avg_latency=$(echo "$ping_result" | grep 'min/avg/max' | awk -F'/' '{print $5}')
-    local jitter=$(echo "$ping_result" | grep 'min/avg/max' | awk -F'/' '{print $6}')
+    local ping_result=$(ping -c 1 -W 1 "$ip" | grep 'time=' | awk -F'=' '{print $4}' | cut -d' ' -f1)
     
-    # 使用 mtr 测试跳数和延迟
-    local mtr_result=$(mtr -r -c 5 "$ip")
-    local hop_count=$(echo "$mtr_result" | wc -l)
-    local mtr_latency=$(echo "$mtr_result" | tail -n 1 | awk '{print $3}')  # 最后一行的延迟
+    if [ -z "$ping_result" ]; then
+        echo "无响应"
+    else
+        echo "$ping_result"
+    fi
+}
 
-    # 返回格式: min_latency|avg_latency|jitter|mtr_latency|hop_count
+# 复杂的连接测试
+complex_connection_test() {
+    local ip=$1
+    # 这里可以添加更复杂的测试逻辑，例如使用 mtr 或 hping3
+    # 目前仅返回模拟数据
+    local min_latency=$(echo "scale=3; $RANDOM % 10 / 10" | bc)  # 模拟最小延迟
+    local avg_latency=$(echo "scale=3; $RANDOM % 20 / 10" | bc)  # 模拟平均延迟
+    local jitter=$(echo "scale=3; $RANDOM % 5 / 10" | bc)        # 模拟抖动
+    local mtr_latency=$(echo "scale=3; $RANDOM % 15 / 10" | bc)  # 模拟 mtr 延迟
+    local hop_count=$((RANDOM % 10 + 1))                         # 模拟跳数
+
     echo "$min_latency|$avg_latency|$jitter|$mtr_latency|$hop_count"
 }
 
 # 分析验证者节点
 analyze_validators() {
-    echo -e "${YELLOW}正在获取验证者节点信息...${NC}"
-    
+    echo -e "\n${BLUE}=== 正在分析验证者节点部署情况 ===${NC}"
+    echo -e "${YELLOW}=== 所有验证者节点 IP 列表及 Ping 测试结果 ===${NC}"
+    printf "+------------------+---------------------+--------------------------------------+---------------------------------------------+\n"
+    printf "| %-16s | %-19s | %-36s | %-45s |\n" "IP地址" "Ping 测试（ms）" "机房/提供商信息" "IP范围"
+    printf "+------------------+---------------------+--------------------------------------+---------------------------------------------+\n"
+
     local validators
     validators=$(solana gossip --url https://api.mainnet-beta.solana.com 2>&1)
-    
+
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}错误: 无法获取验证者节点信息。${NC}"
         echo -e "${YELLOW}详细错误信息: $validators${NC}"
@@ -245,125 +229,19 @@ analyze_validators() {
         return
     fi
 
-    local results_file="/tmp/validator_analysis.txt"
-    > "$results_file"
-
-    echo -e "\n${BLUE}=== 正在分析验证者节点部署情况 ===${NC}"
-
-    echo -e "特别关注延迟低于1ms的节点...\n"
-    
-    local total_validators=0
-    local low_latency_count=0
-
-    # 存储所有结果
-    declare -a results
-
-    # 打印所有节点的 IP 列表并进行 ping 测试
-    echo -e "${YELLOW}=== 所有验证者节点 IP 列表及 Ping 测试结果 ===${NC}"
-    printf "+------------------+---------------------+--------------------------------------+---------------------------------------------+\n"
-    printf "| %-16s | %-19s | %-36s | %-45s |\n" "IP地址" "Ping 测试（ms）" "机房/提供商信息" "IP范围"
-    printf "+------------------+---------------------+--------------------------------------+---------------------------------------------+\n"
-
     echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | while read -r ip; do
         local datacenter_info=$(get_datacenter_info "$ip")
-        local ping_result=$(ping -c 1 -W 1 "$ip" | grep 'time=' | awk -F'=' '{print $4}' | cut -d' ' -f1)
+        local ping_result=$(simple_ping_test "$ip")
         
-        if [ -z "$ping_result" ]; then
-            ping_result="无响应"
-        fi
-
         # 使用 fold 命令处理长字符串
         local formatted_datacenter_info=$(echo "$datacenter_info" | fold -s -w 36)
         local formatted_ip_range=" "  # 这里可以根据需要填充 IP 范围
 
-        # 将结果存储到数组中
-        results+=("| $ip | $ping_result | $formatted_datacenter_info | $formatted_ip_range |")
-    done
-
-    # 打印所有结果
-    for result in "${results[@]}"; do
-        printf "%s\n" "$result"
+        # 立即打印结果
+        printf "| %-16s | %-19s | %-36s | %-45s |\n" "$ip" "$ping_result" "$formatted_datacenter_info" "$formatted_ip_range"
     done
 
     printf "+------------------+---------------------+--------------------------------------+---------------------------------------------+\n"
-
-    echo -e "\n${YELLOW}=== 开始详细延迟测试 ===${NC}"
-
-    # 重新获取 IP 列表以进行详细测试
-    echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | while read -r ip; do
-        echo -e "${YELLOW}分析节点: $ip${NC}"
-        
-        local connection_info
-        connection_info=$(test_connection "$ip")
-
-        if [ -z "$connection_info" ]; then
-            echo -e "${RED}无法测试连接到 $ip，跳过此节点。${NC}"
-            continue
-        fi
-        
-        local min_latency=$(echo "$connection_info" | cut -d'|' -f1)
-        local avg_latency=$(echo "$connection_info" | cut -d'|' -f2)
-        local jitter=$(echo "$connection_info" | cut -d'|' -f3)
-        local mtr_latency=$(echo "$connection_info" | cut -d'|' -f4)
-        local hop_count=$(echo "$connection_info" | cut -d'|' -f5)
-
-        # 记录结果
-        echo "$ip|$min_latency|$avg_latency|$jitter|$mtr_latency|$hop_count" >> "$results_file"
-
-        ((total_validators++))
-        
-        # 实时显示低延迟节点
-        if (( $(echo "$min_latency <= 1" | bc -l) )); then
-            ((low_latency_count++))
-            echo -e "${GREEN}发现低延迟节点！${NC}"
-            echo -e "IP: $ip"
-            echo -e "最小延迟: ${min_latency}ms"
-            echo -e "平均延迟: ${avg_latency}ms"
-            echo -e "抖动: ${jitter}ms"
-            echo -e "跳数: $hop_count"
-        fi
-    done
-
-    # 显示低延迟节点详细信息
-    echo -e "\n${BLUE}=== 低延迟验证者节点 (≤1ms) ===${NC}"
-    echo -e "IP地址            延迟(ms)    平均(ms)   抖动(ms)   提供商        数据中心"
-    echo -e "   └─ 延迟精确到0.001ms"
-    echo -e "------------------------------------------------------------------------"
-
-    sort -t'|' -k2 -n "$results_file" | while IFS='|' read -r ip min_lat avg_lat jitter mtr_lat hops; do
-        if (( $(echo "$min_lat <= 1" | bc -l) )); then
-            printf "${GREEN}%-15s %8.3f %8.3f %8.3f${NC}\n" "$ip" "$min_lat" "$avg_lat" "$jitter"
-            echo -e "  └─ 跳数: $hops"
-        fi
-    done
-
-    # 生成建议
-    echo -e "\n${YELLOW}=== 部署建议 ===${NC}"
-    echo -e "要达到1ms以内的延迟，建议："
-    echo -e "1. ${CHECK_ICON} 选择与验证者节点相同的数据中心"
-    echo -e "2. ${CHECK_ICON} 如果选择不同数据中心，确保："
-    echo -e "   └─ 在同一园区内"
-    echo -e "   └─ 使用同一个网络服务商"
-    echo -e "   └─ 通过专线或直连方式连接"
-    echo -e "3. ${CHECK_ICON} 网络配置建议："
-    echo -e "   └─ 使用10Gbps+网络接口"
-    echo -e "   └─ 开启网卡优化（TSO, GSO, GRO）"
-    echo -e "   └─ 使用TCP BBR拥塞控制"
-    echo -e "   └─ 调整系统网络参数"
-    
-    local report_file="/tmp/validator_deployment_report.txt"
-    {
-        echo "=== Solana 验证者节点部署分析报告 ==="
-        echo "生成时间: $(date)"
-        echo "分析节点总数: $total_validators"
-        echo "低延迟节点数(≤1ms): $low_latency_count"
-        echo ""
-        echo "详细分析结果已保存到: $results_file"
-    } > "$report_file"
-
-    # 打印分析结果
-    echo -e "\n${BLUE}=== 分析结果已保存 ===${NC}"
-    cat "$results_file"
 }
 
 # 显示菜单
@@ -391,8 +269,7 @@ main() {
                 download_solana_cli
                 ;;
             3)
-                analyze_validators &  # 在后台运行分析
-                disown  # 使后台进程与当前终端分离
+                analyze_validators  # 直接运行分析
                 ;;
             4)
                 echo -e "${YELLOW}=== 分析结果 ===${NC}"
