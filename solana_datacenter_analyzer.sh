@@ -124,8 +124,7 @@ check_environment() {
 }
 
 # 云服务提供商IP范围和数据中心信息
-declare -A CLOUD_PROVIDERS=(
-    # 主流云服务商
+declare -A CLOUD_PROVIDERS=( 
     ["AWS"]="https://ip-ranges.amazonaws.com/ip-ranges.json"
     ["Azure"]="https://download.microsoft.com/download/7/1/D/71D86715-5596-4529-9B13-DA13A5DE5B63/ServiceTags_Public_20231127.json"
     ["GCP"]="https://www.gstatic.com/ipranges/cloud.json"
@@ -135,18 +134,13 @@ declare -A CLOUD_PROVIDERS=(
 )
 
 # 数据中心信息
-declare -A DATACENTERS=(
-    # 北美地区
+declare -A DATACENTERS=( 
     ["Ashburn"]="Equinix DC1-DC15|Digital Realty ACC1-ACC4|CoreSite VA1-VA2"
     ["Santa Clara"]="Equinix SV1-SV17|Digital Realty SCL1-SCL3|CoreSite SV1-SV8"
     ["New York"]="Equinix NY1-NY9|Digital Realty NYC1-NYC3|CoreSite NY1-NY2"
-    
-    # 亚太地区
     ["Tokyo"]="Equinix TY1-TY12|@Tokyo CC1-CC2|NTT Communications"
     ["Singapore"]="Equinix SG1-SG5|Digital Realty SIN1-SIN3|NTT SIN1"
     ["Hong Kong"]="Equinix HK1-HK5|MEGA-i|SUNeVision"
-    
-    # 欧洲地区
     ["London"]="Equinix LD1-LD8|Digital Realty LHR1-LHR3|Telehouse"
     ["Frankfurt"]="Equinix FR1-FR7|Digital Realty FRA1-FRA3|Interxion"
     ["Amsterdam"]="Equinix AM1-AM8|Digital Realty AMS1-AMS3|Nikhef"
@@ -175,6 +169,10 @@ install_requirements() {
         sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
         export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
         echo 'export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
+        source ~/.bashrc
+    else
+        echo "更新 Solana CLI 到最新版本..."
+        solana-install update
     fi
 }
 
@@ -188,11 +186,9 @@ test_connection() {
     
     # 使用 hping3 进行高精度延迟测试
     for i in {1..10}; do
-        # -i u100 设置每次发包间隔为100微秒，提高精度
         local hping_result=$(sudo hping3 -c 1 -S -p 80 -i u100 $ip 2>/dev/null | grep "rtt" | cut -d '/' -f 4)
         if [ ! -z "$hping_result" ]; then
             results="$results $hping_result"
-            # 更新最小延迟，使用 bc 保持精度
             if (( $(echo "$hping_result < $min_latency" | bc -l) )); then
                 min_latency=$hping_result
             fi
@@ -200,23 +196,18 @@ test_connection() {
         sleep 0.2
     done
     
-    # 计算平均延迟，保持精度
     local avg_latency=$(echo "$results" | tr ' ' '\n' | awk '{ total += $1; count++ } END { printf "%.3f", total/count }')
-    
-    # 计算抖动（延迟标准差）
     local jitter=$(echo "$results" | tr ' ' '\n' | awk -v avg=$avg_latency '
         BEGIN { sum = 0; count = 0; }
         { sum += ($1 - avg)^2; count++; }
         END { printf "%.3f", sqrt(sum/count) }
     ')
     
-    # 获取路由信息
     local mtr_result=$(mtr -n -c 1 -r $ip 2>/dev/null | tail -1 | awk '{printf "%.3f", $3}')
     local hop_count=$(mtr -n -c 1 -r $ip 2>/dev/null | wc -l)
     
     echo "$min_latency|$avg_latency|$jitter|$mtr_result|$hop_count"
 }
-
 
 # 查找附近可用的数据中心
 find_nearby_datacenters() {
@@ -226,7 +217,6 @@ find_nearby_datacenters() {
     
     echo -e "\n${BLUE}附近可用数据中心:${NC}"
     
-    # 检查预定义的数据中心信息
     for dc_city in "${!DATACENTERS[@]}"; do
         if [[ "$city" == *"$dc_city"* ]] || [[ "$dc_city" == *"$city"* ]]; then
             IFS='|' read -ra dc_list <<< "${DATACENTERS[$dc_city]}"
@@ -280,12 +270,10 @@ get_local_info() {
     echo -e "${INFO_ICON} 位置: $(echo $local_geo | jq -r '.city + ", " + .country')"
     echo -e "${INFO_ICON} ISP: $(echo $local_geo | jq -r '.org')"
     
-    # 测试基础网络性能
     echo -e "\n${BLUE}基础网络性能测试:${NC}"
     echo -e "${NETWORK_ICON} MTU: $(ip link show | grep mtu | head -1 | grep -oP 'mtu \K\d+')"
     echo -e "${NETWORK_ICON} TCP BBR: $(sysctl net.ipv4.tcp_congestion_control | cut -d ' ' -f 3)"
     
-    # 显示网络接口速率
     echo -e "${NETWORK_ICON} 网络接口速率:"
     for interface in $(ls /sys/class/net/); do
         if [ "$interface" != "lo" ]; then
@@ -306,7 +294,6 @@ identify_provider() {
     local datacenter="Unknown"
     local region="Unknown"
 
-    # 检查所有云服务提供商
     for provider_name in "${!CLOUD_PROVIDERS[@]}"; do
         if echo "$whois_info" | grep -qi "$provider_name"; then
             provider=$provider_name
@@ -328,18 +315,15 @@ identify_provider() {
         fi
     done
 
-        # 检查数据中心特征
     local dc_indicators=$(echo "$whois_info" | grep -i "data center\|colocation\|hosting\|idc")
     if [ ! -z "$dc_indicators" ]; then
         datacenter=$(echo "$dc_indicators" | head -1)
     fi
 
-    # 使用 ASN 信息补充
     if [ "$provider" == "Unknown" ]; then
         provider=$(echo "$asn_info" | cut -d' ' -f1)
     fi
 
-    # 获取更详细的地理位置信息
     local geo_info=$(curl -s "https://ipinfo.io/$ip/json")
     local city=$(echo "$geo_info" | jq -r '.city // "Unknown"')
     local country=$(echo "$geo_info" | jq -r '.country // "Unknown"')
@@ -351,33 +335,52 @@ identify_provider() {
 # 分析验证者节点
 analyze_validators() {
     echo -e "${YELLOW}正在获取验证者节点信息...${NC}"
-    local validators=$(solana gossip --url https://api.mainnet-beta.solana.com 2>/dev/null)
+    
+    local validators
+    validators=$(solana gossip --url https://api.mainnet-beta.solana.com 2>&1)
+    
+    if [[ $? -ne 0 ]]; then
+        echo -e "${RED}错误: 无法获取验证者节点信息。${NC}"
+        echo -e "${YELLOW}详细错误信息: $validators${NC}"
+        echo -e "${YELLOW}请检查网络连接或 Solana CLI 配置。${NC}"
+        return
+    fi
+
+    if [ -z "$validators" ]; then
+        echo -e "${RED}错误: 获取到的验证者节点信息为空。${NC}"
+        echo -e "${YELLOW}请检查网络连接或 Solana 网络状态。${NC}"
+        return
+    fi
+
     local results_file="/tmp/validator_analysis.txt"
-    > $results_file
+    > "$results_file"
 
     echo -e "\n${BLUE}=== 正在分析验证者节点部署情况 ===${NC}"
     echo -e "特别关注延迟低于1ms的节点...\n"
     
-    # 获取并分析验证者IP
     local total_validators=0
     local low_latency_count=0
     
-    echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | while read ip; do
+    echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | while read -r ip; do
         echo -e "${YELLOW}分析节点: $ip${NC}"
         
-        local connection_info=$(test_connection $ip)
+        local connection_info
+        connection_info=$(test_connection "$ip")
+        if [ -z "$connection_info" ]; then
+            echo -e "${RED}无法测试连接到 $ip，跳过此节点。${NC}"
+            continue
+        fi
+        
         local min_latency=$(echo "$connection_info" | cut -d'|' -f1)
         local avg_latency=$(echo "$connection_info" | cut -d'|' -f2)
         local jitter=$(echo "$connection_info" | cut -d'|' -f3)
         local mtr_latency=$(echo "$connection_info" | cut -d'|' -f4)
         local hop_count=$(echo "$connection_info" | cut -d'|' -f5)
-        local provider_info=$(identify_provider $ip)
+        local provider_info=$(identify_provider "$ip")
         
-        # 记录结果
-        echo "$ip|$min_latency|$avg_latency|$jitter|$mtr_latency|$hop_count|$provider_info" >> $results_file
+        echo "$ip|$min_latency|$avg_latency|$jitter|$mtr_latency|$hop_count|$provider_info" >> "$results_file"
         ((total_validators++))
         
-        # 实时显示低延迟节点
         if (( $(echo "$min_latency <= 1" | bc -l) )); then
             ((low_latency_count++))
             echo -e "${GREEN}发现低延迟节点！${NC}"
@@ -389,7 +392,6 @@ analyze_validators() {
         fi
     done
 
-    # 显示低延迟节点详细信息
     echo -e "\n${BLUE}=== 低延迟验证者节点 (≤1ms) ===${NC}"
     echo -e "IP地址            延迟(ms)    平均(ms)   抖动(ms)   提供商        数据中心"
     echo -e "   └─ 延迟精确到0.001ms"
@@ -400,12 +402,10 @@ analyze_validators() {
             printf "${GREEN}%-15s %8.3f %8.3f %8.3f  %-13s %-14s${NC}\n" \
                 "$ip" "$min_lat" "$avg_lat" "$jitter" "$provider" "$datacenter"
             
-            # 显示详细信息
             echo -e "  └─ 位置: $city, $country"
             echo -e "  └─ 网络: $org"
             echo -e "  └─ 跳数: $hops"
             
-            # 延迟评级
             if (( $(echo "$min_lat < 0.1" | bc -l) )); then
                 echo -e "  └─ 延迟评级: ${GREEN}极佳 (低于0.1ms)${NC}"
             elif (( $(echo "$min_lat < 0.3" | bc -l) )); then
@@ -416,13 +416,11 @@ analyze_validators() {
                 echo -e "  └─ 延迟评级: ${YELLOW}一般 (0.5-1.0ms)${NC}"
             fi
             
-            # 查找附近可用的数据中心
             find_nearby_datacenters "$city" "$country"
             echo -e "----------------------------------------"
         fi
     done
 
-    # 生成建议
     echo -e "\n${YELLOW}=== 部署建议 ===${NC}"
     echo -e "要达到1ms以内的延迟，建议："
     echo -e "1. ${CHECK_ICON} 选择与验证者节点相同的数据中心"
@@ -436,7 +434,6 @@ analyze_validators() {
     echo -e "   └─ 使用TCP BBR拥塞控制"
     echo -e "   └─ 调整系统网络参数"
     
-    # 保存报告
     local report_file="/tmp/validator_deployment_report.txt"
     {
         echo "=== Solana 验证者节点部署分析报告 ==="
@@ -473,61 +470,21 @@ show_menu() {
     echo
 }
 
-# 显示验证者清单
-show_validators_list() {
-    echo -e "\n${BLUE}=== Solana 验证者节点清单 ===${NC}"
-    echo -e "正在获取验证者信息..."
-    
-    local validators=$(solana gossip --url https://api.mainnet-beta.solana.com 2>/dev/null)
-    local total=0
-    local output_file="/tmp/validators_list.txt"
-    
-    echo -e "IP地址            身份标识        投票账户        状态        版本" > "$output_file"
-    echo -e "----------------------------------------------------------------" >> "$output_file"
-    
-    echo "$validators" | while read -r line; do
-        if [[ $line =~ ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):([0-9]+)[[:space:]]+([A-Za-z0-9]+)[[:space:]]+([A-Za-z0-9]+) ]]; then
-            local ip="${BASH_REMATCH[1]}"
-            local port="${BASH_REMATCH[2]}"
-            local identity="${BASH_REMATCH[3]}"
-            local vote_account="${BASH_REMATCH[4]}"
-            local status="活跃"
-            local version=$(echo "$line" | grep -oP "version: \K[0-9\.]+")
-            
-            printf "%-15s %-14s %-14s %-10s %-8s\n" \
-                "$ip" "${identity:0:12}.." "${vote_account:0:12}.." "$status" "${version:-未知}" >> "$output_file"
-            ((total++))
-        fi
-    done
-    
-    echo -e "\n共找到 $total 个验证者节点"
-    echo -e "按 q 退出查看\n"
-    less -R "$output_file"
-}
-
 # 主函数
 main() {
     echo -e "${BLUE}=== 开始 Solana 验证者节点部署分析 ===${NC}"
     
-    # 检查运行环境
     check_environment
-    
-    # 获取本机信息
     get_local_info
-    
-    # 安装必要工具
     install_requirements
-    
-    # 分析验证者节点
     analyze_validators
     
     echo -e "\n${GREEN}分析完成！${NC}"
     echo -e "${INFO_ICON} 详细分析结果已保存到 /tmp/validator_analysis.txt"
     echo -e "${INFO_ICON} 完整报告已保存到 /tmp/validator_deployment_report.txt"
     
-    # 打印分析结果到屏幕
     echo -e "\n${BLUE}=== 分析结果 ===${NC}"
-    cat "/tmp/validator_analysis.txt"  # 使用 cat 直接打印内容
+    cat "/tmp/validator_analysis.txt"
 }
 
 # 主菜单函数
@@ -538,7 +495,7 @@ menu_main() {
         case $choice in
             1) 
                 echo -e "\n${BLUE}=== 开始初始化和完整分析 ===${NC}"
-                main  # 调用原来的main函数执行完整分析
+                main
                 ;;
             2) 
                 if [ ! -f "/tmp/validator_analysis.txt" ]; then
@@ -552,7 +509,7 @@ menu_main() {
                     echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
                 else
                     echo -e "\n${BLUE}=== 分析结果 ===${NC}"
-                    cat "/tmp/validator_analysis.txt"  # 使用 cat 直接打印内容
+                    cat "/tmp/validator_analysis.txt"
                 fi
                 ;;
             4)
