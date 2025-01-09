@@ -173,6 +173,8 @@ check_and_install_requirements() {
     apt-get update
     apt-get install -y curl mtr traceroute bc jq whois geoip-bin dnsutils hping3 iperf3
 }
+# 确保 Solana CLI 的路径在 PATH 中
+export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
 
 # 下载 Solana CLI
 download_solana_cli() {
