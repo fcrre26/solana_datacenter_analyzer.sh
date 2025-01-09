@@ -20,6 +20,7 @@ RESULTS_FILE="${TEMP_DIR}/validator_locations.txt"
 REPORT_DIR="$HOME/solana_reports"
 LATEST_REPORT="${REPORT_DIR}/latest_report.txt"
 BACKGROUND_LOG="${REPORT_DIR}/background.log"
+LOCK_FILE="/tmp/solana_dc_finder.lock"
 
 # 创建必要的目录
 mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
@@ -38,6 +39,12 @@ log() {
         "SUCCESS") echo -e "${GREEN}${SUCCESS} ${message}${NC}" ;;
         *) echo -e "${message}" ;;
     esac
+}
+
+# 清理函数
+cleanup() {
+    rm -f "$LOCK_FILE"
+    log "INFO" "清理完成"
 }
 
 # 检查依赖
@@ -67,21 +74,15 @@ install_solana_cli() {
     if ! command -v solana &>/dev/null; then
         log "INFO" "Solana CLI 未安装,开始安装..."
         
-        # 下载并安装 Solana CLI
         sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
-        
-        # 添加到 PATH
         export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
         
-        # 验证安装
         if ! command -v solana &>/dev/null; then
             log "ERROR" "Solana CLI 安装失败"
             return 1
         fi
         
         log "SUCCESS" "Solana CLI 安装成功"
-        
-        # 配置 RPC 节点
         solana config set --url https://api.mainnet-beta.solana.com
     else
         log "INFO" "Solana CLI 已安装"
@@ -171,32 +172,36 @@ get_validators() {
 
 # 后台运行分析
 run_background_analysis() {
-    mkdir -p "${REPORT_DIR}"
+    if [ -f "$LOCK_FILE" ]; then
+        log "ERROR" "已有分析任务在运行中"
+        return 1
+    fi
     
-    # 启动后台分析
+    touch "$LOCK_FILE"
+    
     (
         echo "开始后台分析 - $(date)" > "${BACKGROUND_LOG}"
         analyze_validators >> "${BACKGROUND_LOG}" 2>&1
         
-        # 保存报告
         local timestamp=$(date +%Y%m%d_%H%M%S)
         local report_file="${REPORT_DIR}/report_${timestamp}.txt"
         generate_report > "${report_file}"
         
-        # 更新最新报告链接
         ln -sf "${report_file}" "${LATEST_REPORT}"
         
         echo "分析完成 - $(date)" >> "${BACKGROUND_LOG}"
+        rm -f "$LOCK_FILE"
     ) &
     
-    echo "后台分析任务已启动 (PID: $!)"
-    echo "可以通过以下命令查看进度："
+    log "SUCCESS" "后台分析任务已启动 (PID: $!)"
+    echo "使用以下命令查看进度："
     echo "tail -f ${BACKGROUND_LOG}"
 }
 
 # 报告管理
 manage_reports() {
     while true; do
+        clear
         echo -e "\n${BLUE}报告管理${NC}"
         echo "=================================="
         echo "1. 查看最新报告"
@@ -237,7 +242,7 @@ manage_reports() {
             4) find "${REPORT_DIR}" -name "report_*.txt" -mtime +7 -delete
                log "SUCCESS" "已删除7天前的报告"
                sleep 2 ;;
-            5) if pgrep -f "analyze_validators" > /dev/null; then
+            5) if [ -f "$LOCK_FILE" ]; then
                    echo "后台分析正在运行"
                    tail -n 10 "${BACKGROUND_LOG}"
                else
@@ -340,10 +345,22 @@ generate_report() {
     echo "   - 确保与参考节点 $best_ip 在同一网段"
     echo "   - 建议部署前进行多次延迟测试"
     echo "   - 考虑在次优数据中心部署备份节点"
+    
+    # 添加延迟统计
+    echo -e "\n4. 延迟统计："
+    echo "   - 平均延迟: $(awk -F'|' '$4!="timeout" {sum+=$4; count++} END {printf "%.2f", sum/count}' "${RESULTS_FILE}")ms"
+    echo "   - 最低延迟: $(sort -t'|' -k4 -n "${RESULTS_FILE}" | head -1 | cut -d'|' -f4)ms"
+    
+    # 添加地理分布
+    echo -e "\n5. 地理分布："
+    awk -F'|' '{print $3}' "${RESULTS_FILE}" | sort | uniq -c | sort -rn | head -5 | while read count location; do
+        echo "   - $location: $count 个节点"
+    done
 }
 
 # 显示主菜单
 show_menu() {
+    clear
     echo -e "\n${BLUE}Solana 验证者节点位置分析工具${NC}"
     echo "=================================="
     echo "1. 开始分析验证者节点分布"
@@ -362,6 +379,16 @@ main() {
         log "ERROR" "请使用root权限运行此脚本"
         exit 1
     }
+    
+    # 添加信号处理
+    trap 'echo -e "\n${RED}程序被中断${NC}"; exit 1' INT TERM
+    trap cleanup EXIT
+    
+    # 检查是否已在运行
+    if [ -f "$LOCK_FILE" ]; then
+        log "ERROR" "程序已在运行中"
+        exit 1
+    fi
     
     # 检查并安装基础依赖
     check_dependencies || exit 1
