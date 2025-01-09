@@ -1,10 +1,10 @@
-#!/bin/bash
+# 修改脚本开头的参数处理部分
 
 # 启用严格模式
 set -euo pipefail
 
 # 处理命令行参数
-if [ "$1" = "--background-task" ]; then
+if [ "${1:-}" = "--background-task" ]; then
     # 后台任务模式
     analyze_validators
     generate_report "${LATEST_REPORT}"
