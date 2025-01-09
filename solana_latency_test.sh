@@ -178,6 +178,7 @@ run_background_analysis() {
     fi
     
     touch "$LOCK_FILE"
+    log "INFO" "开始后台分析任务..."
     
     (
         echo "开始后台分析 - $(date)" > "${BACKGROUND_LOG}"
@@ -192,10 +193,15 @@ run_background_analysis() {
         echo "分析完成 - $(date)" >> "${BACKGROUND_LOG}"
         rm -f "$LOCK_FILE"
     ) &
-    
-    log "SUCCESS" "后台分析任务已启动 (PID: $!)"
-    echo "使用以下命令查看进度："
-    echo "tail -f ${BACKGROUND_LOG}"
+
+    local pid=$!
+    log "SUCCESS" "后台分析任务已启动 (PID: $pid)"
+    echo -e "\n您可以通过以下方式查看进度："
+    echo "1. 使用命令: tail -f ${BACKGROUND_LOG}"
+    echo "2. 在主菜单选择'3'进入报告管理"
+    echo "3. 在报告管理中选择'5'查看任务状态"
+    echo -e "\n按回车键返回主菜单..."
+    read
 }
 
 # 报告管理
