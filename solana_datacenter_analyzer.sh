@@ -65,6 +65,35 @@ DC_ICON="🏢"
 NETWORK_ICON="🌐"
 LATENCY_ICON="⚡"
 
+# 云服务提供商IP范围和数据中心信息
+declare -A CLOUD_PROVIDERS=(
+    # 主流云服务商
+    ["AWS"]="https://ip-ranges.amazonaws.com/ip-ranges.json"
+    ["Azure"]="https://download.microsoft.com/download/7/1/D/71D86715-5596-4529-9B13-DA13A5DE5B63/ServiceTags_Public_20231127.json"
+    ["GCP"]="https://www.gstatic.com/ipranges/cloud.json"
+    ["Alibaba"]="https://raw.githubusercontent.com/alibaba/alibaba-cloud-ip-ranges/main/ip-ranges.json"
+    ["Oracle"]="https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json"
+    ["IBM"]="https://cloud.ibm.com/network-security/ip-ranges"
+)
+
+# 数据中心信息
+declare -A DATACENTERS=(
+    # 北美地区
+    ["Ashburn"]="Equinix DC1-DC15|Digital Realty ACC1-ACC4|CoreSite VA1-VA2"
+    ["Santa Clara"]="Equinix SV1-SV17|Digital Realty SCL1-SCL3|CoreSite SV1-SV8"
+    ["New York"]="Equinix NY1-NY9|Digital Realty NYC1-NYC3|CoreSite NY1-NY2"
+    
+    # 亚太地区
+    ["Tokyo"]="Equinix TY1-TY12|@Tokyo CC1-CC2|NTT Communications"
+    ["Singapore"]="Equinix SG1-SG5|Digital Realty SIN1-SIN3|NTT SIN1"
+    ["Hong Kong"]="Equinix HK1-HK5|MEGA-i|SUNeVision"
+    
+    # 欧洲地区
+    ["London"]="Equinix LD1-LD8|Digital Realty LHR1-LHR3|Telehouse"
+    ["Frankfurt"]="Equinix FR1-FR7|Digital Realty FRA1-FRA3|Interxion"
+    ["Amsterdam"]="Equinix AM1-AM8|Digital Realty AMS1-AMS3|Nikhef"
+)
+
 # 日志文件
 LOG_FILE="/tmp/solana_analysis.log"
 
@@ -155,7 +184,11 @@ get_datacenter_info() {
     local ip=$1
     # 使用 whois 命令获取信息
     local info=$(whois "$ip" | grep -E 'OrgName|NetName|City' | tr '\n' ' ')
-    echo "$info"
+    
+    # 提取 IP 范围
+    local net_range=$(whois "$ip" | grep -E 'NetRange|CIDR' | tr '\n' ' ')
+    
+    echo "$info | $net_range"
 }
 
 # 测试连接
