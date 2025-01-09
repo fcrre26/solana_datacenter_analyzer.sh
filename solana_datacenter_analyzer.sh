@@ -127,10 +127,17 @@ check_environment() {
 download_solana_cli() {
     echo "下载 Solana CLI..."
     sh -c "$(curl -sSfL https://release.solana.com/v1.18.15/install)"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}错误: Solana CLI 下载失败，请检查网络连接。${NC}"
+        exit 1
+    fi
     echo 'export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"' >> /root/.bashrc
     export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
     source /root/.bashrc
-    solana --version
+    solana --version || {
+        echo -e "${RED}错误: Solana CLI 安装后未能正确识别，请检查安装。${NC}"
+        exit 1
+    }
 }
 
 # 安装必要工具
@@ -221,11 +228,12 @@ analyze_validators() {
         local jitter=$(echo "$connection_info" | cut -d'|' -f3)
         local mtr_latency=$(echo "$connection_info" | cut -d'|' -f4)
         local hop_count=$(echo "$connection_info" | cut -d'|' -f5)
-        local provider_info=$(identify_provider "$ip")
         
-        echo "$ip|$min_latency|$avg_latency|$jitter|$mtr_latency|$hop_count|$provider_info" >> "$results_file"
+        # 记录结果
+        echo "$ip|$min_latency|$avg_latency|$jitter|$mtr_latency|$hop_count" >> "$results_file"
         ((total_validators++))
         
+        # 实时显示低延迟节点
         if (( $(echo "$min_latency <= 1" | bc -l) )); then
             ((low_latency_count++))
             echo -e "${GREEN}发现低延迟节点！${NC}"
@@ -237,35 +245,20 @@ analyze_validators() {
         fi
     done
 
+    # 显示低延迟节点详细信息
     echo -e "\n${BLUE}=== 低延迟验证者节点 (≤1ms) ===${NC}"
     echo -e "IP地址            延迟(ms)    平均(ms)   抖动(ms)   提供商        数据中心"
     echo -e "   └─ 延迟精确到0.001ms"
     echo -e "------------------------------------------------------------------------"
 
-    sort -t'|' -k2 -n "$results_file" | while IFS='|' read -r ip min_lat avg_lat jitter mtr_lat hops provider region datacenter city country org; do
+    sort -t'|' -k2 -n "$results_file" | while IFS='|' read -r ip min_lat avg_lat jitter mtr_lat hops; do
         if (( $(echo "$min_lat <= 1" | bc -l) )); then
-            printf "${GREEN}%-15s %8.3f %8.3f %8.3f  %-13s %-14s${NC}\n" \
-                "$ip" "$min_lat" "$avg_lat" "$jitter" "$provider" "$datacenter"
-            
-            echo -e "  └─ 位置: $city, $country"
-            echo -e "  └─ 网络: $org"
+            printf "${GREEN}%-15s %8.3f %8.3f %8.3f${NC}\n" "$ip" "$min_lat" "$avg_lat" "$jitter"
             echo -e "  └─ 跳数: $hops"
-            
-            if (( $(echo "$min_lat < 0.1" | bc -l) )); then
-                echo -e "  └─ 延迟评级: ${GREEN}极佳 (低于0.1ms)${NC}"
-            elif (( $(echo "$min_lat < 0.3" | bc -l) )); then
-                echo -e "  └─ 延迟评级: ${GREEN}优秀 (低于0.3ms)${NC}"
-            elif (( $(echo "$min_lat < 0.5" | bc -l) )); then
-                echo -e "  └─ 延迟评级: ${GREEN}良好 (低于0.5ms)${NC}"
-            else
-                echo -e "  └─ 延迟评级: ${YELLOW}一般 (0.5-1.0ms)${NC}"
-            fi
-            
-            find_nearby_datacenters "$city" "$country"
-            echo -e "----------------------------------------"
         fi
     done
 
+    # 生成建议
     echo -e "\n${YELLOW}=== 部署建议 ===${NC}"
     echo -e "要达到1ms以内的延迟，建议："
     echo -e "1. ${CHECK_ICON} 选择与验证者节点相同的数据中心"
@@ -320,7 +313,6 @@ main() {
     echo -e "${BLUE}=== 开始 Solana 验证者节点部署分析 ===${NC}"
     
     check_environment
-    get_local_info
     install_requirements
     analyze_validators
     
