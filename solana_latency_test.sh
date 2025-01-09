@@ -13,11 +13,16 @@ WARN="[WARN]"
 ERROR="[ERROR]"
 SUCCESS="[OK]"
 
-# 临时目录和文件
+# 目录和文件配置
 TEMP_DIR="/tmp/solana_dc_finder"
 LOG_FILE="${TEMP_DIR}/dc_finder.log"
 RESULTS_FILE="${TEMP_DIR}/validator_locations.txt"
-mkdir -p "${TEMP_DIR}"
+REPORT_DIR="$HOME/solana_reports"
+LATEST_REPORT="${REPORT_DIR}/latest_report.txt"
+BACKGROUND_LOG="${REPORT_DIR}/background.log"
+
+# 创建必要的目录
+mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
 
 # 日志函数
 log() {
@@ -148,14 +153,12 @@ identify_datacenter() {
 get_validators() {
     log "INFO" "正在获取验证者信息..."
     
-    # 尝试使用 solana gossip
     local validators=$(solana gossip 2>/dev/null)
     if [ $? -ne 0 ]; then
         log "ERROR" "无法通过 solana gossip 获取验证者信息"
         return 1
     fi
     
-    # 提取IP地址
     local ips=$(echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u)
     if [ -z "$ips" ]; then
         log "ERROR" "未找到有效的验证者IP地址"
@@ -166,20 +169,99 @@ get_validators() {
     return 0
 }
 
+# 后台运行分析
+run_background_analysis() {
+    mkdir -p "${REPORT_DIR}"
+    
+    # 启动后台分析
+    (
+        echo "开始后台分析 - $(date)" > "${BACKGROUND_LOG}"
+        analyze_validators >> "${BACKGROUND_LOG}" 2>&1
+        
+        # 保存报告
+        local timestamp=$(date +%Y%m%d_%H%M%S)
+        local report_file="${REPORT_DIR}/report_${timestamp}.txt"
+        generate_report > "${report_file}"
+        
+        # 更新最新报告链接
+        ln -sf "${report_file}" "${LATEST_REPORT}"
+        
+        echo "分析完成 - $(date)" >> "${BACKGROUND_LOG}"
+    ) &
+    
+    echo "后台分析任务已启动 (PID: $!)"
+    echo "可以通过以下命令查看进度："
+    echo "tail -f ${BACKGROUND_LOG}"
+}
+
+# 报告管理
+manage_reports() {
+    while true; do
+        echo -e "\n${BLUE}报告管理${NC}"
+        echo "=================================="
+        echo "1. 查看最新报告"
+        echo "2. 列出所有报告"
+        echo "3. 查看指定报告"
+        echo "4. 删除旧报告"
+        echo "5. 查看后台任务状态"
+        echo "0. 返回主菜单"
+        echo "=================================="
+        
+        read -p "请选择操作 [0-5]: " report_choice
+        case $report_choice in
+            1) if [ -f "${LATEST_REPORT}" ]; then
+                   clear
+                   cat "${LATEST_REPORT}"
+                   read -p "按回车键继续..."
+               else
+                   log "ERROR" "没有找到最新报告"
+                   sleep 2
+               fi ;;
+            2) echo -e "\n可用报告列表："
+               ls -lh "${REPORT_DIR}"/report_*.txt 2>/dev/null | \
+                   awk '{print NR". " $9 " (" $5 ")" }'
+               read -p "按回车键继续..." ;;
+            3) ls -1 "${REPORT_DIR}"/report_*.txt 2>/dev/null | \
+                   awk '{print NR". " $0}'
+               read -p "请输入报告编号: " report_num
+               local report_file=$(ls -1 "${REPORT_DIR}"/report_*.txt 2>/dev/null | \
+                   sed -n "${report_num}p")
+               if [ -f "${report_file}" ]; then
+                   clear
+                   cat "${report_file}"
+                   read -p "按回车键继续..."
+               else
+                   log "ERROR" "无效的报告编号"
+                   sleep 2
+               fi ;;
+            4) find "${REPORT_DIR}" -name "report_*.txt" -mtime +7 -delete
+               log "SUCCESS" "已删除7天前的报告"
+               sleep 2 ;;
+            5) if pgrep -f "analyze_validators" > /dev/null; then
+                   echo "后台分析正在运行"
+                   tail -n 10 "${BACKGROUND_LOG}"
+               else
+                   echo "没有正在运行的后台分析任务"
+               fi
+               read -p "按回车键继续..." ;;
+            0) return ;;
+            *) log "ERROR" "无效选择"
+               sleep 1 ;;
+        esac
+    done
+}
+
 # 分析验证者节点
 analyze_validators() {
     log "INFO" "开始分析验证者节点分布"
     
-    # 获取验证者列表
     local validator_ips=$(get_validators)
     if [ $? -ne 0 ]; then
         return 1
     fi
     
-    # 清空结果文件
     > "${RESULTS_FILE}"
     
-    # 计算总数
     local total=$(echo "$validator_ips" | wc -l)
     local current=0
     
@@ -190,16 +272,13 @@ analyze_validators() {
         ((current++))
         show_progress $current $total
         
-        # 获取数据中心信息
         local dc_info=$(identify_datacenter "$ip")
         local dc_name=$(echo "$dc_info" | cut -d'|' -f1)
         local dc_location=$(echo "$dc_info" | cut -d'|' -f2)
         
-        # 测试网络质量
         local network_stats=$(test_network_quality "$ip")
         local latency=$(echo "$network_stats" | cut -d'|' -f2)
         
-        # 保存结果
         echo "$ip|$dc_name|$dc_location|$latency" >> "${RESULTS_FILE}"
     done
     
@@ -263,14 +342,14 @@ generate_report() {
     echo "   - 考虑在次优数据中心部署备份节点"
 }
 
-# 显示菜单
+# 显示主菜单
 show_menu() {
     echo -e "\n${BLUE}Solana 验证者节点位置分析工具${NC}"
     echo "=================================="
-    echo "1. 分析验证者节点分布"
-    echo "2. 测试指定IP的数据中心位置"
-    echo "3. 查看最近的分析报告"
-    echo "4. 导出分析结果"
+    echo "1. 开始分析验证者节点分布"
+    echo "2. 在后台运行分析"
+    echo "3. 报告管理"
+    echo "4. 测试指定IP的数据中心位置"
     echo "0. 退出"
     echo "=================================="
     echo -ne "请选择操作 [0-4]: "
@@ -296,26 +375,14 @@ main() {
         
         case $choice in
             1) analyze_validators ;;
-            2) read -p "请输入要测试的IP地址: " test_ip
+            2) run_background_analysis ;;
+            3) manage_reports ;;
+            4) read -p "请输入要测试的IP地址: " test_ip
                if [[ $test_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
                    dc_info=$(identify_datacenter "$test_ip")
                    echo -e "\n数据中心信息: $dc_info"
                else
                    log "ERROR" "无效的IP地址"
-               fi
-               read -p "按回车键继续..." ;;
-            3) if [ -f "${RESULTS_FILE}" ]; then
-                   generate_report
-               else
-                   log "ERROR" "没有找到分析报告"
-               fi
-               read -p "按回车键继续..." ;;
-            4) if [ -f "${RESULTS_FILE}" ]; then
-                   local output_file="solana_validators_$(date +%Y%m%d_%H%M%S).txt"
-                   cp "${RESULTS_FILE}" "./${output_file}"
-                   log "SUCCESS" "分析结果已导出到: ${output_file}"
-               else
-                   log "ERROR" "没有找到分析结果"
                fi
                read -p "按回车键继续..." ;;
             0) log "INFO" "感谢使用！"
