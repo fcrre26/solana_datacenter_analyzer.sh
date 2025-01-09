@@ -4,7 +4,9 @@
 set -euo pipefail
 
 # 处理命令行参数
-if [ "${1:-}" = "--background-task" ]; then
+BACKGROUND_TASK="${1:-}"
+
+if [ "${BACKGROUND_TASK}" = "--background-task" ]; then
     # 后台任务模式
     analyze_validators
     generate_report "${LATEST_REPORT}"
