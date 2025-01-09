@@ -123,28 +123,15 @@ check_environment() {
     fi
 }
 
-# 云服务提供商IP范围和数据中心信息
-declare -A CLOUD_PROVIDERS=( 
-    ["AWS"]="https://ip-ranges.amazonaws.com/ip-ranges.json"
-    ["Azure"]="https://download.microsoft.com/download/7/1/D/71D86715-5596-4529-9B13-DA13A5DE5B63/ServiceTags_Public_20231127.json"
-    ["GCP"]="https://www.gstatic.com/ipranges/cloud.json"
-    ["Alibaba"]="https://raw.githubusercontent.com/alibaba/alibaba-cloud-ip-ranges/main/ip-ranges.json"
-    ["Oracle"]="https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json"
-    ["IBM"]="https://cloud.ibm.com/network-security/ip-ranges"
-)
-
-# 数据中心信息
-declare -A DATACENTERS=( 
-    ["Ashburn"]="Equinix DC1-DC15|Digital Realty ACC1-ACC4|CoreSite VA1-VA2"
-    ["Santa Clara"]="Equinix SV1-SV17|Digital Realty SCL1-SCL3|CoreSite SV1-SV8"
-    ["New York"]="Equinix NY1-NY9|Digital Realty NYC1-NYC3|CoreSite NY1-NY2"
-    ["Tokyo"]="Equinix TY1-TY12|@Tokyo CC1-CC2|NTT Communications"
-    ["Singapore"]="Equinix SG1-SG5|Digital Realty SIN1-SIN3|NTT SIN1"
-    ["Hong Kong"]="Equinix HK1-HK5|MEGA-i|SUNeVision"
-    ["London"]="Equinix LD1-LD8|Digital Realty LHR1-LHR3|Telehouse"
-    ["Frankfurt"]="Equinix FR1-FR7|Digital Realty FRA1-FRA3|Interxion"
-    ["Amsterdam"]="Equinix AM1-AM8|Digital Realty AMS1-AMS3|Nikhef"
-)
+# 下载 Solana CLI
+download_solana_cli() {
+    echo "下载 Solana CLI..."
+    sh -c "$(curl -sSfL https://release.solana.com/v1.18.15/install)"
+    echo 'export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"' >> /root/.bashrc
+    export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
+    source /root/.bashrc
+    solana --version
+}
 
 # 安装必要工具
 install_requirements() {
@@ -152,27 +139,9 @@ install_requirements() {
     apt-get update
     apt-get install -y curl mtr traceroute bc jq whois geoip-bin dnsutils hping3 iperf3
 
-    # 创建临时目录存储IP范围数据
-    mkdir -p /tmp/cloud_ranges
-    
-    # 下载云服务提供商的IP范围数据
-    echo "正在更新云服务提供商IP范围数据..."
-    for provider in "${!CLOUD_PROVIDERS[@]}"; do
-        local url="${CLOUD_PROVIDERS[$provider]}"
-        local file="/tmp/cloud_ranges/${provider,,}.json"
-        curl -s "$url" > "$file" 2>/dev/null || echo "无法下载 $provider 的IP范围数据"
-    done
-
-    # 安装 Solana CLI 如果没有安装的话
+    # 下载 Solana CLI
     if ! command -v solana &> /dev/null; then
-        echo "安装 Solana CLI..."
-        sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
-        export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
-        echo 'export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
-        source ~/.bashrc
-    else
-        echo "更新 Solana CLI 到最新版本..."
-        solana-install update
+        download_solana_cli
     fi
 }
 
@@ -184,7 +153,6 @@ test_connection() {
     
     echo -e "${YELLOW}正在进行高精度延迟测试: $ip${NC}"
     
-    # 使用 hping3 进行高精度延迟测试
     for i in {1..10}; do
         local hping_result=$(sudo hping3 -c 1 -S -p 80 -i u100 $ip 2>/dev/null | grep "rtt" | cut -d '/' -f 4)
         if [ ! -z "$hping_result" ]; then
@@ -207,129 +175,6 @@ test_connection() {
     local hop_count=$(mtr -n -c 1 -r $ip 2>/dev/null | wc -l)
     
     echo "$min_latency|$avg_latency|$jitter|$mtr_result|$hop_count"
-}
-
-# 查找附近可用的数据中心
-find_nearby_datacenters() {
-    local city=$1
-    local country=$2
-    local found=false
-    
-    echo -e "\n${BLUE}附近可用数据中心:${NC}"
-    
-    for dc_city in "${!DATACENTERS[@]}"; do
-        if [[ "$city" == *"$dc_city"* ]] || [[ "$dc_city" == *"$city"* ]]; then
-            IFS='|' read -ra dc_list <<< "${DATACENTERS[$dc_city]}"
-            for dc in "${dc_list[@]}"; do
-                echo -e "${DC_ICON} $dc"
-                echo -e "   └─ 城市: $dc_city"
-                echo -e "   └─ 联系方式: https://www.${dc%%[0-9]*}.com/contact"
-                echo -e "   └─ 机柜预估价格: $(get_datacenter_price "$dc")"
-            done
-            found=true
-        fi
-    done
-    
-    if [ "$found" = false ]; then
-        echo -e "${WARNING_ICON} 未找到预定义的数据中心信息，尝试在线查询..."
-        local nearby_dcs=$(curl -s "https://api.datacentermap.com/v1/datacenters/near/$city,$country" 2>/dev/null)
-        if [ ! -z "$nearby_dcs" ]; then
-            echo "$nearby_dcs" | jq -r '.[] | "     • \(.name) (\(.provider))"'
-        else
-            echo "     • 请手动查询该地区的数据中心：https://www.datacentermap.com"
-        fi
-    fi
-}
-
-# 获取数据中心预估价格
-get_datacenter_price() {
-    local dc=$1
-    case "$dc" in
-        *"Equinix"*)
-            echo "机柜: $2000-3500/月, 带宽: $500-1000/Mbps/月"
-            ;;
-        *"Digital Realty"*)
-            echo "机柜: $1800-3000/月, 带宽: $400-900/Mbps/月"
-            ;;
-        *"CoreSite"*)
-            echo "机柜: $1500-2800/月, 带宽: $300-800/Mbps/月"
-            ;;
-        *)
-            echo "价格需要询问"
-            ;;
-    esac
-}
-
-# 获取本机信息
-get_local_info() {
-    echo -e "\n${BLUE}=== 本机网络环境信息 ===${NC}"
-    local_ip=$(curl -s ifconfig.me)
-    local_geo=$(curl -s "https://ipinfo.io/$local_ip/json")
-    
-    echo -e "${INFO_ICON} IP地址: $local_ip"
-    echo -e "${INFO_ICON} 位置: $(echo $local_geo | jq -r '.city + ", " + .country')"
-    echo -e "${INFO_ICON} ISP: $(echo $local_geo | jq -r '.org')"
-    
-    echo -e "\n${BLUE}基础网络性能测试:${NC}"
-    echo -e "${NETWORK_ICON} MTU: $(ip link show | grep mtu | head -1 | grep -oP 'mtu \K\d+')"
-    echo -e "${NETWORK_ICON} TCP BBR: $(sysctl net.ipv4.tcp_congestion_control | cut -d ' ' -f 3)"
-    
-    echo -e "${NETWORK_ICON} 网络接口速率:"
-    for interface in $(ls /sys/class/net/); do
-        if [ "$interface" != "lo" ]; then
-            speed=$(cat /sys/class/net/$interface/speed 2>/dev/null)
-            if [ ! -z "$speed" ]; then
-                echo "   └─ $interface: ${speed}Mbps"
-            fi
-        fi
-    done
-}
-
-# 识别云服务提供商和数据中心
-identify_provider() {
-    local ip=$1
-    local whois_info=$(whois $ip 2>/dev/null)
-    local asn_info=$(curl -s "https://ipinfo.io/$ip/org")
-    local provider="Unknown"
-    local datacenter="Unknown"
-    local region="Unknown"
-
-    for provider_name in "${!CLOUD_PROVIDERS[@]}"; do
-        if echo "$whois_info" | grep -qi "$provider_name"; then
-            provider=$provider_name
-            case $provider_name in
-                "AWS")
-                    region=$(curl -s "https://ip-ranges.amazonaws.com/ip-ranges.json" | \
-                            jq -r ".prefixes[] | select(.ip_prefix == \"$ip/32\" or contains(\"$ip\")) | .region")
-                    ;;
-                "Azure")
-                    region=$(curl -s "${CLOUD_PROVIDERS[$provider_name]}" | \
-                            jq -r ".values[] | select(.properties.region != null) | .properties.region")
-                    ;;
-                "GCP")
-                    region=$(curl -s "${CLOUD_PROVIDERS[$provider_name]}" | \
-                            jq -r ".prefixes[] | select(.ipv4prefix != null) | .scope")
-                    ;;
-            esac
-            break
-        fi
-    done
-
-    local dc_indicators=$(echo "$whois_info" | grep -i "data center\|colocation\|hosting\|idc")
-    if [ ! -z "$dc_indicators" ]; then
-        datacenter=$(echo "$dc_indicators" | head -1)
-    fi
-
-    if [ "$provider" == "Unknown" ]; then
-        provider=$(echo "$asn_info" | cut -d' ' -f1)
-    fi
-
-    local geo_info=$(curl -s "https://ipinfo.io/$ip/json")
-    local city=$(echo "$geo_info" | jq -r '.city // "Unknown"')
-    local country=$(echo "$geo_info" | jq -r '.country // "Unknown"')
-    local org=$(echo "$geo_info" | jq -r '.org // "Unknown"')
-
-    echo "$provider|$region|$datacenter|$city|$country|$org"
 }
 
 # 分析验证者节点
