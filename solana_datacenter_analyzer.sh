@@ -67,40 +67,59 @@ LATENCY_ICON="⚡"
 
 # 检查运行环境
 check_environment() {
-    echo "正在检查运行环境..."
+    echo -e "${BLUE}=== 正在检查运行环境 ===${NC}"
+    local has_warning=false
     
     # 检查操作系统
     if ! grep -q "Ubuntu\|Debian" /etc/os-release; then
-        echo "警告: 推荐使用 Ubuntu 20.04+ 或 Debian 11+"
+        echo -e "${WARNING_ICON} ${YELLOW}警告: 推荐使用 Ubuntu 20.04+ 或 Debian 11+${NC}"
+        has_warning=true
     fi
     
     # 检查CPU核心数
     cpu_cores=$(nproc)
     if [ "$cpu_cores" -lt 2 ]; then
-        echo "警告: CPU核心数小于推荐值(2核)"
+        echo -e "${WARNING_ICON} ${YELLOW}警告: CPU核心数小于推荐值(2核)${NC}"
+        has_warning=true
     fi
     
     # 检查内存
     total_mem=$(free -m | awk '/^Mem:/{print $2}')
     if [ "$total_mem" -lt 4000 ]; then
-        echo "警告: 内存小于推荐值(4GB)"
+        echo -e "${WARNING_ICON} ${YELLOW}警告: 内存小于推荐值(4GB)${NC}"
+        has_warning=true
     fi
     
     # 检查磁盘空间
     free_space=$(df -m / | awk 'NR==2 {print $4}')
     if [ "$free_space" -lt 20000 ]; then
-        echo "警告: 可用磁盘空间小于推荐值(20GB)"
+        echo -e "${WARNING_ICON} ${YELLOW}警告: 可用磁盘空间小于推荐值(20GB)${NC}"
+        has_warning=true
     fi
     
     # 检查网络连接
     if ! ping -c 1 google.com >/dev/null 2>&1; then
-        echo "警告: 网络连接可能不稳定"
+        echo -e "${WARNING_ICON} ${YELLOW}警告: 网络连接可能不稳定${NC}"
+        has_warning=true
     fi
     
     # 检查root权限
     if [ "$EUID" -ne 0 ]; then 
-        echo "错误: 请使用root权限运行此脚本"
+        echo -e "${RED}错误: 请使用root权限运行此脚本${NC}"
         exit 1
+    fi
+
+    # 如果有警告，询问用户是否继续
+    if [ "$has_warning" = true ]; then
+        echo -e "\n${YELLOW}检测到系统可能不满足推荐配置要求。${NC}"
+        read -p "是否仍要继续？(y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "已取消执行。"
+            exit 1
+        fi
+    else
+        echo -e "${GREEN}✓ 系统环境检查通过${NC}"
     fi
 }
 
