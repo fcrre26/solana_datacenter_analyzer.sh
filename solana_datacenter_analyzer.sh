@@ -129,6 +129,13 @@ check_environment() {
     fi
 }
 
+# 安装必要工具
+install_requirements() {
+    echo "正在安装必要工具..."
+    apt-get update
+    apt-get install -y curl mtr traceroute bc jq whois geoip-bin dnsutils hping3 iperf3
+}
+
 # 下载 Solana CLI
 download_solana_cli() {
     echo "下载 Solana CLI..."
@@ -146,48 +153,37 @@ download_solana_cli() {
     }
 }
 
-# 安装必要工具
-install_requirements() {
-    echo "正在安装必要工具..."
-    apt-get update
-    apt-get install -y curl mtr traceroute bc jq whois geoip-bin dnsutils hping3 iperf3
-
-    # 下载 Solana CLI
-    if ! command -v solana &> /dev/null; then
-        download_solana_cli
-    fi
+# 获取机房和提供商信息
+get_datacenter_info() {
+    local ip=$1
+    # 使用 whois 命令获取信息
+    local info=$(whois "$ip" | grep -E 'OrgName|NetName|City' | tr '\n' ' ')
+    echo "$info"
 }
 
-# 优化的延迟测试函数
+# 测试连接
 test_connection() {
     local ip=$1
-    local results=""
-    local min_latency=999.999
+
+    # 使用 ping 测试延迟
+    local ping_result=$(ping -c 5 -W 1 "$ip")
+    if [ $? -ne 0 ]; then
+        echo "无法连接到 $ip"
+        return
+    fi
+
+    # 提取最小、平均和最大延迟
+    local min_latency=$(echo "$ping_result" | grep 'min/avg/max' | awk -F'/' '{print $4}')
+    local avg_latency=$(echo "$ping_result" | grep 'min/avg/max' | awk -F'/' '{print $5}')
+    local jitter=$(echo "$ping_result" | grep 'min/avg/max' | awk -F'/' '{print $6}')
     
-    echo -e "${YELLOW}正在进行高精度延迟测试: $ip${NC}"
-    
-    for i in {1..10}; do
-        local hping_result=$(sudo hping3 -c 1 -S -p 80 -i u100 $ip 2>/dev/null | grep "rtt" | cut -d '/' -f 4)
-        if [ ! -z "$hping_result" ]; then
-            results="$results $hping_result"
-            if (( $(echo "$hping_result < $min_latency" | bc -l) )); then
-                min_latency=$hping_result
-            fi
-        fi
-        sleep 0.2
-    done
-    
-    local avg_latency=$(echo "$results" | tr ' ' '\n' | awk '{ total += $1; count++ } END { printf "%.3f", total/count }')
-    local jitter=$(echo "$results" | tr ' ' '\n' | awk -v avg=$avg_latency '
-        BEGIN { sum = 0; count = 0; }
-        { sum += ($1 - avg)^2; count++; }
-        END { printf "%.3f", sqrt(sum/count) }
-    ')
-    
-    local mtr_result=$(mtr -n -c 1 -r $ip 2>/dev/null | tail -1 | awk '{printf "%.3f", $3}')
-    local hop_count=$(mtr -n -c 1 -r $ip 2>/dev/null | wc -l)
-    
-    echo "$min_latency|$avg_latency|$jitter|$mtr_result|$hop_count"
+    # 使用 mtr 测试跳数和延迟
+    local mtr_result=$(mtr -r -c 5 "$ip")
+    local hop_count=$(echo "$mtr_result" | wc -l)
+    local mtr_latency=$(echo "$mtr_result" | tail -n 1 | awk '{print $3}')  # 最后一行的延迟
+
+    # 返回格式: min_latency|avg_latency|jitter|mtr_latency|hop_count
+    echo "$min_latency|$avg_latency|$jitter|$mtr_latency|$hop_count"
 }
 
 # 分析验证者节点
@@ -218,7 +214,24 @@ analyze_validators() {
     
     local total_validators=0
     local low_latency_count=0
-    
+
+    # 打印所有节点的 IP 列表并进行 ping 测试
+    echo -e "${YELLOW}=== 所有验证者节点 IP 列表及 Ping 测试结果 ===${NC}"
+    echo -e "IP地址            机房/提供商        Ping结果"
+    echo -e "-----------------------------------------------"
+
+    echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | while read -r ip; do
+        local datacenter_info=$(get_datacenter_info "$ip")
+        local ping_result=$(ping -c 1 -W 1 "$ip" | grep 'time=' | awk -F'=' '{print $4}' | cut -d' ' -f1)
+        if [ -z "$ping_result" ]; then
+            ping_result="无响应"
+        fi
+        printf "%-15s %-20s %s\n" "$ip" "$datacenter_info" "$ping_result"
+    done
+
+    echo -e "\n${YELLOW}=== 开始详细延迟测试 ===${NC}"
+
+    # 重新获取 IP 列表以进行详细测试
     echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | while read -r ip; do
         echo -e "${YELLOW}分析节点: $ip${NC}"
         
@@ -289,90 +302,14 @@ analyze_validators() {
     } > "$report_file"
 }
 
-# 显示主菜单
-show_menu() {
-    clear
-    echo -e "${BLUE}=== Solana 验证者节点分析工具 ===${NC}"
-    echo -e "${YELLOW}1.${NC} 运行完整分析 (包含初始化和依赖安装)"
-    echo -e "${YELLOW}2.${NC} 显示所有验证者节点清单"
-    echo -e "${YELLOW}3.${NC} 查看最近的分析结果"
-    echo -e "${YELLOW}4.${NC} 查看特定IP的详细信息"
-    echo -e "${YELLOW}5.${NC} 导出分析报告"
-    echo -e "${YELLOW}6.${NC} 系统环境检查"
-    echo -e "${YELLOW}7.${NC} 查看帮助信息"
-    echo -e "${YELLOW}0.${NC} 退出"
-    echo
-}
-
 # 主函数
 main() {
-    while true; do
-        show_menu
-        read -p "请选择功能 (0-7): " choice
-        case $choice in
-            1) 
-                echo -e "\n${BLUE}=== 开始初始化和完整分析 ===${NC}"
-                check_environment
-                install_requirements
-                analyze_validators &
-                echo -e "${GREEN}分析任务已在后台运行！${NC}"
-                ;;
-            2) 
-                if [ ! -f "/tmp/validator_analysis.txt" ]; then
-                    echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
-                else
-                    cat /tmp/validator_analysis.txt
-                fi
-                ;;
-            3) 
-                if [ ! -f "/tmp/validator_analysis.txt" ]; then
-                    echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
-                else
-                    echo -e "\n${BLUE}=== 分析结果 ===${NC}"
-                    cat /tmp/validator_analysis.txt
-                fi
-                ;;
-            4)
-                if [ ! -f "/tmp/validator_analysis.txt" ]; then
-                    echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
-                else
-                    read -p "请输入要查看的IP地址: " ip
-                    grep "^$ip" "/tmp/validator_analysis.txt" | less
-                fi
-                ;;
-            5) 
-                if [ ! -f "/tmp/validator_analysis.txt" ]; then
-                    echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
-                else
-                    local report_file="$HOME/solana_analysis_$(date +%Y%m%d_%H%M%S).txt"
-                    cp /tmp/validator_analysis.txt "$report_file"
-                    echo "报告已导出到: $report_file"
-                fi
-                ;;
-            6) check_environment ;;
-            7)
-                echo -e "${BLUE}=== 帮助信息 ===${NC}"
-                echo -e "${YELLOW}首次使用必须先运行选项 1 进行初始化和完整分析！${NC}"
-                echo
-                echo "1. 运行完整分析: 初始化系统并进行完整的延迟测试"
-                echo "2. 显示验证者清单: 列出所有活跃的验证者节点"
-                echo "3. 查看分析结果: 显示最近一次的分析结果"
-                echo "4. 查看IP详情: 查看特定IP的详细信息"
-                echo "5. 导出报告: 将分析结果导出到文件"
-                echo "6. 环境检查: 检查系统运行环境"
-                echo "0. 退出程序"
-                ;;
-            0) 
-                echo "感谢使用！"
-                exit 0
-                ;;
-            *) echo "无效选择" ;;
-        esac
-        
-        echo -e "\n按回车键继续..."
-        read
-    done
+    check_environment
+    install_requirements
+    download_solana_cli
+    analyze_validators
 }
 
 # 启动程序
-main  # 在前台运行主函数
+main &  # 在后台运行主函数
+disown  # 使后台进程与当前终端分离
