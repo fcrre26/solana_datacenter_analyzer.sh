@@ -462,6 +462,122 @@ main() {
     echo -e "${INFO_ICON} 完整报告已保存到 /tmp/validator_deployment_report.txt"
 }
 
-# 运行主函数
-main
+# 显示主菜单
+show_menu() {
+    clear
+    echo -e "${BLUE}=== Solana 验证者节点分析工具 ===${NC}"
+    echo -e "${YELLOW}1.${NC} 显示所有验证者节点清单"
+    echo -e "${YELLOW}2.${NC} 运行延迟分析"
+    echo -e "${YELLOW}3.${NC} 查看最近的分析结果"
+    echo -e "${YELLOW}4.${NC} 查看特定IP的详细信息"
+    echo -e "${YELLOW}5.${NC} 导出分析报告"
+    echo -e "${YELLOW}6.${NC} 系统环境检查"
+    echo -e "${YELLOW}7.${NC} 查看帮助信息"
+    echo -e "${YELLOW}0.${NC} 退出"
+    echo
+    echo -e "当前状态:"
+    if [ -f "/tmp/validator_analysis.txt" ]; then
+        echo -e "${GREEN}✓${NC} 已有分析结果"
+        echo -e "   └─ 最后分析时间: $(stat -c %y /tmp/validator_analysis.txt | cut -d. -f1)"
+    else
+        echo -e "${RED}✗${NC} 暂无分析结果"
+    fi
+    echo
+}
+
+# 显示验证者清单
+show_validators_list() {
+    echo -e "\n${BLUE}=== Solana 验证者节点清单 ===${NC}"
+    echo -e "正在获取验证者信息..."
+    
+    local validators=$(solana gossip --url https://api.mainnet-beta.solana.com 2>/dev/null)
+    local total=0
+    local output_file="/tmp/validators_list.txt"
+    
+    echo -e "IP地址            身份标识        投票账户        状态        版本" > "$output_file"
+    echo -e "----------------------------------------------------------------" >> "$output_file"
+    
+    echo "$validators" | while read -r line; do
+        if [[ $line =~ ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):([0-9]+)[[:space:]]+([A-Za-z0-9]+)[[:space:]]+([A-Za-z0-9]+) ]]; then
+            local ip="${BASH_REMATCH[1]}"
+            local port="${BASH_REMATCH[2]}"
+            local identity="${BASH_REMATCH[3]}"
+            local vote_account="${BASH_REMATCH[4]}"
+            local status="活跃"
+            local version=$(echo "$line" | grep -oP "version: \K[0-9\.]+")
+            
+            printf "%-15s %-14s %-14s %-10s %-8s\n" \
+                "$ip" "${identity:0:12}.." "${vote_account:0:12}.." "$status" "${version:-未知}" >> "$output_file"
+            ((total++))
+        fi
+    done
+    
+    # 显示结果，使用less进行分页
+    echo -e "\n共找到 $total 个验证者节点"
+    echo -e "按 q 退出查看\n"
+    less -R "$output_file"
+}
+
+# 主函数
+main() {
+    while true; do
+        show_menu
+        read -p "请选择功能 (0-7): " choice
+        case $choice in
+            1) show_validators_list ;;
+            2) 
+                # 获取本机信息
+                get_local_info
+                # 安装必要工具
+                install_requirements
+                # 分析验证者节点
+                analyze_validators
+                ;;
+            3) 
+                if [ -f "/tmp/validator_analysis.txt" ]; then
+                    echo -e "\n${BLUE}=== 分析结果 ===${NC}"
+                    less "/tmp/validator_analysis.txt"
+                else
+                    echo -e "${RED}错误: 没有找到分析结果，请先运行延迟分析。${NC}"
+                fi
+                ;;
+            4)
+                read -p "请输入要查看的IP地址: " ip
+                if [ -f "/tmp/validator_analysis.txt" ]; then
+                    grep "^$ip" "/tmp/validator_analysis.txt" | less
+                else
+                    echo -e "${RED}错误: 没有找到分析结果。${NC}"
+                fi
+                ;;
+            5) 
+                if [ -f "/tmp/validator_analysis.txt" ]; then
+                    local report_file="$HOME/solana_analysis_$(date +%Y%m%d_%H%M%S).txt"
+                    cp /tmp/validator_analysis.txt "$report_file"
+                    echo "报告已导出到: $report_file"
+                else
+                    echo -e "${RED}错误: 没有找到分析结果。${NC}"
+                fi
+                ;;
+            6) check_environment ;;
+            7)
+                echo -e "${BLUE}=== 帮助信息 ===${NC}"
+                echo "1. 显示验证者清单: 列出所有活跃的验证者节点"
+                echo "2. 运行延迟分析: 对所有验证者节点进行延迟测试"
+                echo "3. 查看分析结果: 显示最近一次的分析结果"
+                echo "4. 查看IP详情: 查看特定IP的详细信息"
+                echo "5. 导出报告: 将分析结果导出到文件"
+                echo "6. 环境检查: 检查系统运行环境"
+                echo "0. 退出程序"
+                ;;
+            0) 
+                echo "感谢使用！"
+                exit 0
+                ;;
+            *) echo "无效选择" ;;
+        esac
+        
+        echo -e "\n按回车键继续..."
+        read
+    done
+}
 
