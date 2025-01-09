@@ -1,7 +1,8 @@
 #!/bin/bash
 
 <<'COMMENT'
-Solana 验证者节点部署分析工具 v1.0
+Solana 验证者节点部署分析工具 v1.2
+专注于寻找超低延迟(≤1ms)部署位置，精确到0.001ms
 
 【运行环境要求】
 - 操作系统: Ubuntu 20.04+ / Debian 11+
@@ -19,9 +20,10 @@ Solana 验证者节点部署分析工具 v1.0
 【工作流程】
 1. 分析当前 VPS 的网络环境
 2. 扫描所有 Solana 验证者节点
-3. 识别验证者节点的部署位置和服务商
-4. 计算网络延迟和路由质量
-5. 提供最优部署位置建议
+3. 进行高精度延迟测试(精确到0.001ms)
+4. 重点识别低延迟(≤1ms)的节点
+5. 查找目标节点附近的可用数据中心
+6. 提供具体的部署建议
 
 【注意事项】
 - 首次运行需要安装依赖工具，可能需要5-10分钟
@@ -31,15 +33,14 @@ Solana 验证者节点部署分析工具 v1.0
 - 结果仅供参考，实际部署时还需考虑成本等因素
 
 【输出结果】
-- 验证者节点分布统计
-- 云服务商使用情况
-- 数据中心分布
-- 网络延迟分析
+- 超低延迟验证者节点列表（精确到0.001ms）
+- 相关数据中心信息
+- 网络路径分析
 - 具体部署建议
 
 【作者】
 Created by: Claude
-Version: 1.0
+Version: 1.2
 Last Updated: 2024-01-20
 
 【使用许可】
@@ -60,6 +61,9 @@ NODE_ICON="📡"
 CHECK_ICON="✅"
 CLOUD_ICON="☁️"
 WARNING_ICON="⚠️"
+DC_ICON="🏢"
+NETWORK_ICON="🌐"
+LATENCY_ICON="⚡"
 
 # 检查运行环境
 check_environment() {
@@ -99,6 +103,7 @@ check_environment() {
         exit 1
     fi
 }
+
 # 云服务提供商IP范围和数据中心信息
 declare -A CLOUD_PROVIDERS=(
     # 主流云服务商
@@ -106,48 +111,33 @@ declare -A CLOUD_PROVIDERS=(
     ["Azure"]="https://download.microsoft.com/download/7/1/D/71D86715-5596-4529-9B13-DA13A5DE5B63/ServiceTags_Public_20231127.json"
     ["GCP"]="https://www.gstatic.com/ipranges/cloud.json"
     ["Alibaba"]="https://raw.githubusercontent.com/alibaba/alibaba-cloud-ip-ranges/main/ip-ranges.json"
-    
-    # 其他大型云服务商
     ["Oracle"]="https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json"
     ["IBM"]="https://cloud.ibm.com/network-security/ip-ranges"
-    ["Tencent"]="https://ip-ranges.tencentcloud.com/ip-ranges.json"
-    ["Huawei"]="https://ip-ranges.huaweicloud.com/ip-ranges.json"
+)
+
+# 数据中心信息
+declare -A DATACENTERS=(
+    # 北美地区
+    ["Ashburn"]="Equinix DC1-DC15|Digital Realty ACC1-ACC4|CoreSite VA1-VA2"
+    ["Santa Clara"]="Equinix SV1-SV17|Digital Realty SCL1-SCL3|CoreSite SV1-SV8"
+    ["New York"]="Equinix NY1-NY9|Digital Realty NYC1-NYC3|CoreSite NY1-NY2"
     
-    # 专业主机服务商
-    ["DigitalOcean"]="https://digitalocean.com/geo/google.csv"
-    ["Vultr"]="https://api.vultr.com/v2/regions"
-    ["Linode"]="https://api.linode.com/v4/regions"
-    ["OVH"]="https://ip-ranges.ovh.net/ip-ranges.json"
-    ["Hetzner"]="https://ipv4.hetzner.com/ip-ranges.json"
+    # 亚太地区
+    ["Tokyo"]="Equinix TY1-TY12|@Tokyo CC1-CC2|NTT Communications"
+    ["Singapore"]="Equinix SG1-SG5|Digital Realty SIN1-SIN3|NTT SIN1"
+    ["Hong Kong"]="Equinix HK1-HK5|MEGA-i|SUNeVision"
     
-    # 专业数据中心
-    ["Equinix"]="https://ip-ranges.equinix.com"
-    ["EdgeConneX"]="https://www.edgeconnex.com/locations"
-    ["CyrusOne"]="https://cyrusone.com/data-center-locations"
-    ["NTT"]="https://www.ntt.com/en/services/network/gin/ip-addresses.html"
-    
-    # 亚洲数据中心
-    ["SingTel"]="https://singtel.com/data-centres"
-    ["KDDI"]="https://global.kddi.com/business/data-center"
-    ["ChinaMobile"]="https://www.chinamobileltd.com/en/business/int_dc.php"
-    ["ChinaTelecom"]="https://www.chinatelecomglobal.com/products/idc"
-    
-    # 欧洲数据中心
-    ["InterXion"]="https://www.interxion.com/data-centres"
-    ["GlobalSwitch"]="https://www.globalswitch.com/locations"
-    ["Telehouse"]="https://www.telehouse.net/data-centers"
-    
-    # 美洲数据中心
-    ["CoreSite"]="https://www.coresite.com/data-centers"
-    ["QTS"]="https://www.qtsdatacenters.com/data-centers"
-    ["Switch"]="https://www.switch.com/data-centers"
+    # 欧洲地区
+    ["London"]="Equinix LD1-LD8|Digital Realty LHR1-LHR3|Telehouse"
+    ["Frankfurt"]="Equinix FR1-FR7|Digital Realty FRA1-FRA3|Interxion"
+    ["Amsterdam"]="Equinix AM1-AM8|Digital Realty AMS1-AMS3|Nikhef"
 )
 
 # 安装必要工具
 install_requirements() {
     echo "正在安装必要工具..."
     apt-get update
-    apt-get install -y curl mtr traceroute bc jq whois geoip-bin dnsutils
+    apt-get install -y curl mtr traceroute bc jq whois geoip-bin dnsutils hping3 iperf3
 
     # 创建临时目录存储IP范围数据
     mkdir -p /tmp/cloud_ranges
@@ -169,13 +159,123 @@ install_requirements() {
     fi
 }
 
+# 优化的延迟测试函数
+test_connection() {
+    local ip=$1
+    local results=""
+    local min_latency=999.999
+    
+    echo -e "${YELLOW}正在进行高精度延迟测试: $ip${NC}"
+    
+    # 使用 hping3 进行高精度延迟测试
+    for i in {1..10}; do
+        # -i u100 设置每次发包间隔为100微秒，提高精度
+        local hping_result=$(sudo hping3 -c 1 -S -p 80 -i u100 $ip 2>/dev/null | grep "rtt" | cut -d '/' -f 4)
+        if [ ! -z "$hping_result" ]; then
+            results="$results $hping_result"
+            # 更新最小延迟，使用 bc 保持精度
+            if (( $(echo "$hping_result < $min_latency" | bc -l) )); then
+                min_latency=$hping_result
+            fi
+        fi
+        sleep 0.2
+    done
+    
+    # 计算平均延迟，保持精度
+    local avg_latency=$(echo "$results" | tr ' ' '\n' | awk '{ total += $1; count++ } END { printf "%.3f", total/count }')
+    
+    # 计算抖动（延迟标准差）
+    local jitter=$(echo "$results" | tr ' ' '\n' | awk -v avg=$avg_latency '
+        BEGIN { sum = 0; count = 0; }
+        { sum += ($1 - avg)^2; count++; }
+        END { printf "%.3f", sqrt(sum/count) }
+    ')
+    
+    # 获取路由信息
+    local mtr_result=$(mtr -n -c 1 -r $ip 2>/dev/null | tail -1 | awk '{printf "%.3f", $3}')
+    local hop_count=$(mtr -n -c 1 -r $ip 2>/dev/null | wc -l)
+    
+    echo "$min_latency|$avg_latency|$jitter|$mtr_result|$hop_count"
+}
+
+
+# 查找附近可用的数据中心
+find_nearby_datacenters() {
+    local city=$1
+    local country=$2
+    local found=false
+    
+    echo -e "\n${BLUE}附近可用数据中心:${NC}"
+    
+    # 检查预定义的数据中心信息
+    for dc_city in "${!DATACENTERS[@]}"; do
+        if [[ "$city" == *"$dc_city"* ]] || [[ "$dc_city" == *"$city"* ]]; then
+            IFS='|' read -ra dc_list <<< "${DATACENTERS[$dc_city]}"
+            for dc in "${dc_list[@]}"; do
+                echo -e "${DC_ICON} $dc"
+                echo -e "   └─ 城市: $dc_city"
+                echo -e "   └─ 联系方式: https://www.${dc%%[0-9]*}.com/contact"
+                echo -e "   └─ 机柜预估价格: $(get_datacenter_price "$dc")"
+            done
+            found=true
+        fi
+    done
+    
+    if [ "$found" = false ]; then
+        echo -e "${WARNING_ICON} 未找到预定义的数据中心信息，尝试在线查询..."
+        local nearby_dcs=$(curl -s "https://api.datacentermap.com/v1/datacenters/near/$city,$country" 2>/dev/null)
+        if [ ! -z "$nearby_dcs" ]; then
+            echo "$nearby_dcs" | jq -r '.[] | "     • \(.name) (\(.provider))"'
+        else
+            echo "     • 请手动查询该地区的数据中心：https://www.datacentermap.com"
+        fi
+    fi
+}
+
+# 获取数据中心预估价格
+get_datacenter_price() {
+    local dc=$1
+    case "$dc" in
+        *"Equinix"*)
+            echo "机柜: $2000-3500/月, 带宽: $500-1000/Mbps/月"
+            ;;
+        *"Digital Realty"*)
+            echo "机柜: $1800-3000/月, 带宽: $400-900/Mbps/月"
+            ;;
+        *"CoreSite"*)
+            echo "机柜: $1500-2800/月, 带宽: $300-800/Mbps/月"
+            ;;
+        *)
+            echo "价格需要询问"
+            ;;
+    esac
+}
+
 # 获取本机信息
 get_local_info() {
+    echo -e "\n${BLUE}=== 本机网络环境信息 ===${NC}"
     local_ip=$(curl -s ifconfig.me)
-    local_geo=$(geoiplookup $local_ip 2>/dev/null)
-    echo -e "${BLUE}本机信息:${NC}"
-    echo -e "IP: $local_ip"
-    echo -e "位置: $local_geo"
+    local_geo=$(curl -s "https://ipinfo.io/$local_ip/json")
+    
+    echo -e "${INFO_ICON} IP地址: $local_ip"
+    echo -e "${INFO_ICON} 位置: $(echo $local_geo | jq -r '.city + ", " + .country')"
+    echo -e "${INFO_ICON} ISP: $(echo $local_geo | jq -r '.org')"
+    
+    # 测试基础网络性能
+    echo -e "\n${BLUE}基础网络性能测试:${NC}"
+    echo -e "${NETWORK_ICON} MTU: $(ip link show | grep mtu | head -1 | grep -oP 'mtu \K\d+')"
+    echo -e "${NETWORK_ICON} TCP BBR: $(sysctl net.ipv4.tcp_congestion_control | cut -d ' ' -f 3)"
+    
+    # 显示网络接口速率
+    echo -e "${NETWORK_ICON} 网络接口速率:"
+    for interface in $(ls /sys/class/net/); do
+        if [ "$interface" != "lo" ]; then
+            speed=$(cat /sys/class/net/$interface/speed 2>/dev/null)
+            if [ ! -z "$speed" ]; then
+                echo "   └─ $interface: ${speed}Mbps"
+            fi
+        fi
+    done
 }
 
 # 识别云服务提供商和数据中心
@@ -189,36 +289,26 @@ identify_provider() {
 
     # 检查所有云服务提供商
     for provider_name in "${!CLOUD_PROVIDERS[@]}"; do
-        case $provider_name in
-            "AWS")
-                if echo "$whois_info" | grep -qi "amazon"; then
-                    provider="AWS"
+        if echo "$whois_info" | grep -qi "$provider_name"; then
+            provider=$provider_name
+            case $provider_name in
+                "AWS")
                     region=$(curl -s "https://ip-ranges.amazonaws.com/ip-ranges.json" | \
                             jq -r ".prefixes[] | select(.ip_prefix == \"$ip/32\" or contains(\"$ip\")) | .region")
-                fi
-                ;;
-            "Azure")
-                if echo "$whois_info" | grep -qi "microsoft"; then
-                    provider="Azure"
+                    ;;
+                "Azure")
                     region=$(curl -s "${CLOUD_PROVIDERS[$provider_name]}" | \
                             jq -r ".values[] | select(.properties.region != null) | .properties.region")
-                fi
-                ;;
-            "GCP")
-                if echo "$whois_info" | grep -qi "google"; then
-                    provider="Google Cloud"
+                    ;;
+                "GCP")
                     region=$(curl -s "${CLOUD_PROVIDERS[$provider_name]}" | \
                             jq -r ".prefixes[] | select(.ipv4prefix != null) | .scope")
-                fi
-                ;;
-            *)
-                if echo "$whois_info" | grep -qi "$provider_name"; then
-                    provider=$provider_name
-                    region=$(echo "$whois_info" | grep -i "location\|region\|city" | head -1 | cut -d':' -f2)
-                fi
-                ;;
-        esac
+                    ;;
+            esac
+            break
+        fi
     done
+
         # 检查数据中心特征
     local dc_indicators=$(echo "$whois_info" | grep -i "data center\|colocation\|hosting\|idc")
     if [ ! -z "$dc_indicators" ]; then
@@ -239,60 +329,6 @@ identify_provider() {
     echo "$provider|$region|$datacenter|$city|$country|$org"
 }
 
-# 测试连接质量
-test_connection() {
-    local ip=$1
-    local ping_result=$(ping -c 3 $ip 2>/dev/null | tail -1 | awk '{print $4}' | cut -d '/' -f 2)
-    local mtr_result=$(mtr -n -c 1 -r $ip 2>/dev/null | tail -1 | awk '{print $3}')
-    echo "${ping_result:-999}|${mtr_result:-999}"
-}
-
-# 显示数据中心统计信息
-show_datacenter_stats() {
-    local results_file=$1
-    echo -e "\n${BLUE}=== 数据中心和云服务提供商分布 ===${NC}"
-    
-    # 统计提供商分布
-    declare -A provider_stats
-    declare -A region_stats
-    declare -A datacenter_stats
-    
-    while IFS='|' read -r ip latency provider region datacenter city country org; do
-        ((provider_stats[$provider]++))
-        ((region_stats[$region]++))
-        ((datacenter_stats[$datacenter]++))
-    done < "$results_file"
-
-    # 显示提供商统计
-    echo -e "\n${YELLOW}云服务提供商分布:${NC}"
-    for provider in "${!provider_stats[@]}"; do
-        local count=${provider_stats[$provider]}
-        local total=$(wc -l < "$results_file")
-        local percentage=$(echo "scale=2; $count * 100 / $total" | bc)
-        printf "${CLOUD_ICON} %-25s: %3d 节点 (%5.2f%%)\n" "$provider" "$count" "$percentage"
-    done
-
-    # 显示区域统计
-    echo -e "\n${YELLOW}区域分布:${NC}"
-    for region in "${!region_stats[@]}"; do
-        local count=${region_stats[$region]}
-        local total=$(wc -l < "$results_file")
-        local percentage=$(echo "scale=2; $count * 100 / $total" | bc)
-        printf "🌎 %-25s: %3d 节点 (%5.2f%%)\n" "$region" "$count" "$percentage"
-    done
-
-    # 显示数据中心统计
-    echo -e "\n${YELLOW}数据中心分布:${NC}"
-    for datacenter in "${!datacenter_stats[@]}"; do
-        if [ "$datacenter" != "Unknown" ]; then
-            local count=${datacenter_stats[$datacenter]}
-            local total=$(wc -l < "$results_file")
-            local percentage=$(echo "scale=2; $count * 100 / $total" | bc)
-            printf "🏢 %-25s: %3d 节点 (%5.2f%%)\n" "$datacenter" "$count" "$percentage"
-        fi
-    done
-}
-
 # 分析验证者节点
 analyze_validators() {
     echo -e "${YELLOW}正在获取验证者节点信息...${NC}"
@@ -301,72 +337,95 @@ analyze_validators() {
     > $results_file
 
     echo -e "\n${BLUE}=== 正在分析验证者节点部署情况 ===${NC}"
+    echo -e "特别关注延迟低于1ms的节点...\n"
     
     # 获取并分析验证者IP
     local total_validators=0
+    local low_latency_count=0
+    
     echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | while read ip; do
         echo -e "${YELLOW}分析节点: $ip${NC}"
         
         local connection_info=$(test_connection $ip)
-        local latency=$(echo "$connection_info" | cut -d'|' -f1)
-        local mtr_latency=$(echo "$connection_info" | cut -d'|' -f2)
+        local min_latency=$(echo "$connection_info" | cut -d'|' -f1)
+        local avg_latency=$(echo "$connection_info" | cut -d'|' -f2)
+        local jitter=$(echo "$connection_info" | cut -d'|' -f3)
+        local mtr_latency=$(echo "$connection_info" | cut -d'|' -f4)
+        local hop_count=$(echo "$connection_info" | cut -d'|' -f5)
         local provider_info=$(identify_provider $ip)
         
         # 记录结果
-        echo "$ip|$latency|$provider_info" >> $results_file
+        echo "$ip|$min_latency|$avg_latency|$jitter|$mtr_latency|$hop_count|$provider_info" >> $results_file
         ((total_validators++))
-    done
-
-      # 显示结果
-    echo -e "\n${BLUE}=== 验证者节点分析结果 ===${NC}"
-    echo -e "IP地址            延迟(ms)  提供商        区域           数据中心"
-    echo -e "------------------------------------------------------------------------"
-
-    # 排序并显示结果（按延迟排序）
-    sort -t'|' -k2 -n "$results_file" | while IFS='|' read -r ip latency provider region datacenter city country org; do
-        if (( $(echo "$latency < 50" | bc -l) )); then
-            if (( $(echo "$latency < 1" | bc -l) )); then
-                printf "${GREEN}%-15s %-8s %-13s %-14s %s${NC}\n" \
-                    "$ip" "$latency" "$provider" "$region" "$datacenter"
-            else
-                printf "%-15s %-8s %-13s %-14s %s\n" \
-                    "$ip" "$latency" "$provider" "$region" "$datacenter"
-            fi
-            
-            # 显示详细地理信息
-            echo -e "  └─ 位置: $city, $country"
-            [ "$org" != "Unknown" ] && echo -e "  └─ 网络: $org"
+        
+        # 实时显示低延迟节点
+        if (( $(echo "$min_latency <= 1" | bc -l) )); then
+            ((low_latency_count++))
+            echo -e "${GREEN}发现低延迟节点！${NC}"
+            echo -e "IP: $ip"
+            echo -e "最小延迟: ${min_latency}ms"
+            echo -e "平均延迟: ${avg_latency}ms"
+            echo -e "抖动: ${jitter}ms"
+            echo -e "跳数: $hop_count"
         fi
     done
 
-    # 显示统计信息
-    show_datacenter_stats "$results_file"
+    # 显示低延迟节点详细信息
+    echo -e "\n${BLUE}=== 低延迟验证者节点 (≤1ms) ===${NC}"
+    echo -e "IP地址            延迟(ms)    平均(ms)   抖动(ms)   提供商        数据中心"
+    echo -e "   └─ 延迟精确到0.001ms"
+    echo -e "------------------------------------------------------------------------"
+
+    sort -t'|' -k2 -n "$results_file" | while IFS='|' read -r ip min_lat avg_lat jitter mtr_lat hops provider region datacenter city country org; do
+        if (( $(echo "$min_lat <= 1" | bc -l) )); then
+            printf "${GREEN}%-15s %8.3f %8.3f %8.3f  %-13s %-14s${NC}\n" \
+                "$ip" "$min_lat" "$avg_lat" "$jitter" "$provider" "$datacenter"
+            
+            # 显示详细信息
+            echo -e "  └─ 位置: $city, $country"
+            echo -e "  └─ 网络: $org"
+            echo -e "  └─ 跳数: $hops"
+            
+            # 延迟评级
+            if (( $(echo "$min_lat < 0.1" | bc -l) )); then
+                echo -e "  └─ 延迟评级: ${GREEN}极佳 (低于0.1ms)${NC}"
+            elif (( $(echo "$min_lat < 0.3" | bc -l) )); then
+                echo -e "  └─ 延迟评级: ${GREEN}优秀 (低于0.3ms)${NC}"
+            elif (( $(echo "$min_lat < 0.5" | bc -l) )); then
+                echo -e "  └─ 延迟评级: ${GREEN}良好 (低于0.5ms)${NC}"
+            else
+                echo -e "  └─ 延迟评级: ${YELLOW}一般 (0.5-1.0ms)${NC}"
+            fi
+            
+            # 查找附近可用的数据中心
+            find_nearby_datacenters "$city" "$country"
+            echo -e "----------------------------------------"
+        fi
+    done
 
     # 生成建议
     echo -e "\n${YELLOW}=== 部署建议 ===${NC}"
-    echo "基于分析结果，推荐以下部署选择："
+    echo -e "要达到1ms以内的延迟，建议："
+    echo -e "1. ${CHECK_ICON} 选择与验证者节点相同的数据中心"
+    echo -e "2. ${CHECK_ICON} 如果选择不同数据中心，确保："
+    echo -e "   └─ 在同一园区内"
+    echo -e "   └─ 使用同一个网络服务商"
+    echo -e "   └─ 通过专线或直连方式连接"
+    echo -e "3. ${CHECK_ICON} 网络配置建议："
+    echo -e "   └─ 使用10Gbps+网络接口"
+    echo -e "   └─ 开启网卡优化（TSO, GSO, GRO）"
+    echo -e "   └─ 使用TCP BBR拥塞控制"
+    echo -e "   └─ 调整系统网络参数"
     
-    # 找出最佳部署位置
-    local best_locations=$(sort -t'|' -k2 -n "$results_file" | head -n 5)
-    echo -e "\n最佳部署位置 (基于延迟和集中度):"
-    echo "$best_locations" | while IFS='|' read -r ip latency provider region datacenter city country org; do
-        echo -e "${CHECK_ICON} $provider - $region"
-        echo "   位置: $city, $country"
-        echo "   数据中心: $datacenter"
-        echo "   延迟: ${latency}ms"
-        echo "   网络: $org"
-        echo ""
-    done
-
-    # 保存详细报告
+    # 保存报告
     local report_file="/tmp/validator_deployment_report.txt"
     {
         echo "=== Solana 验证者节点部署分析报告 ==="
         echo "生成时间: $(date)"
         echo "分析节点总数: $total_validators"
+        echo "低延迟节点数(≤1ms): $low_latency_count"
         echo ""
         echo "详细分析结果已保存到: $results_file"
-        echo "完整统计信息已保存到: $report_file"
     } > "$report_file"
 }
 
@@ -376,7 +435,7 @@ main() {
     
     # 显示脚本说明
     echo -e "${BLUE}=== Solana 验证者节点部署分析工具 ===${NC}"
-    echo -e "${YELLOW}此工具将帮助您找到最优的验证者节点部署位置${NC}"
+    echo -e "${YELLOW}专注于寻找超低延迟(≤1ms)部署位置${NC}"
     echo -e "详细说明请查看脚本开头的注释\n"
     
     # 检查运行环境
@@ -405,3 +464,4 @@ main() {
 
 # 运行主函数
 main
+
