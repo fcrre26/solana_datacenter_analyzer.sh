@@ -524,6 +524,10 @@ main() {
     echo -e "\n${GREEN}分析完成！${NC}"
     echo -e "${INFO_ICON} 详细分析结果已保存到 /tmp/validator_analysis.txt"
     echo -e "${INFO_ICON} 完整报告已保存到 /tmp/validator_deployment_report.txt"
+    
+    # 打印分析结果到屏幕
+    echo -e "\n${BLUE}=== 分析结果 ===${NC}"
+    cat "/tmp/validator_analysis.txt"  # 使用 cat 直接打印内容
 }
 
 # 主菜单函数
@@ -548,7 +552,7 @@ menu_main() {
                     echo -e "${RED}错误: 请先运行选项 1 进行完整分析${NC}"
                 else
                     echo -e "\n${BLUE}=== 分析结果 ===${NC}"
-                    less "/tmp/validator_analysis.txt"
+                    cat "/tmp/validator_analysis.txt"  # 使用 cat 直接打印内容
                 fi
                 ;;
             4)
