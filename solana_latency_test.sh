@@ -948,6 +948,184 @@ show_menu() {
     echo -ne "${GREEN}请输入您的选择 [0-6]: ${NC}"
 }
 
+# 后台任务管理菜单
+show_background_menu() {
+    while true; do
+        clear
+        echo -e "${GREEN}后台任务管理${NC}"
+        echo "==================="
+        echo -e "${GREEN}1. 启动后台并发分析${NC}"
+        echo -e "${GREEN}2. 实时监控后台任务${NC}"
+        echo -e "${GREEN}3. 停止后台任务${NC}"
+        echo -e "${GREEN}4. 查看后台任务状态${NC}"
+        echo -e "${GREEN}5. 查看最新报告${NC}"
+        echo -e "${RED}0. 返回主菜单${NC}"
+        echo
+        echo -ne "${GREEN}请选择 [0-5]: ${NC}"
+        read -r choice
+
+        case $choice in
+            1)  if [ -f "${TEMP_DIR}/background.pid" ]; then
+                    log "ERROR" "已有后台任务在运行"
+                else
+                    log "INFO" "启动后台分析任务..."
+                    
+                    # 获取脚本的完整路径
+                    SCRIPT_PATH=$(readlink -f "$0")
+                    
+                    # 确保目录存在
+                    mkdir -p "${TEMP_DIR}"
+                    mkdir -p "$(dirname "${BACKGROUND_LOG}")"
+                    
+                    # 记录开始时间
+                    date +%s > "${TEMP_DIR}/start_time"
+                    
+                    # 使用 nohup 启动后台进程
+                    nohup bash "${SCRIPT_PATH}" background > "${BACKGROUND_LOG}" 2>&1 &
+                    local pid=$!
+                    
+                    # 等待确保进程启动
+                    sleep 2
+                    
+                    if kill -0 $pid 2>/dev/null; then
+                        echo $pid > "${TEMP_DIR}/background.pid"
+                        log "SUCCESS" "后台任务已启动，进程ID: $pid"
+                        log "INFO" "可以使用选项 2 监控任务进度"
+                    else
+                        log "ERROR" "后台任务启动失败"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                    fi
+                fi
+                ;;
+            2)  if [ -f "${BACKGROUND_LOG}" ]; then
+                    clear
+                    echo -e "\n${GREEN}正在监控后台任务 (按 Ctrl+C 退出监控)${NC}"
+                    echo -e "${GREEN}===================${NC}\n"
+                    tail -f "${BACKGROUND_LOG}"
+                else
+                    log "WARN" "没有运行中的后台任务"
+                fi
+                ;;
+            3)  if [ -f "${TEMP_DIR}/background.pid" ]; then
+                    local pid=$(cat "${TEMP_DIR}/background.pid")
+                    if kill -0 "$pid" 2>/dev/null; then
+                        kill "$pid"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                        log "SUCCESS" "后台任务已停止"
+                    else
+                        log "WARN" "后台任务已不存在"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                    fi
+                else
+                    log "WARN" "没有运行中的后台任务"
+                fi
+                ;;
+            4)  if [ -f "${TEMP_DIR}/background.pid" ]; then
+                    local pid=$(cat "${TEMP_DIR}/background.pid")
+                    if kill -0 "$pid" 2>/dev/null; then
+                        log "INFO" "后台任务正在运行 (PID: $pid)"
+                        if [ -f "${PROGRESS_FILE}" ]; then
+                            local progress=$(cat "${PROGRESS_FILE}")
+                            log "INFO" "当前进度: $progress"
+                        fi
+                        
+                        if [ -f "${BACKGROUND_LOG}" ]; then
+                            echo -e "\n最新日志:"
+                            tail -n 5 "${BACKGROUND_LOG}"
+                        fi
+                    else
+                        log "WARN" "后台任务已结束"
+                        rm -f "${TEMP_DIR}/background.pid"
+                    fi
+                else
+                    log "INFO" "没有运行中的后台任务"
+                fi
+                ;;
+            5)  if [ -f "${LATEST_REPORT}" ]; then
+                    clear
+                    cat "${LATEST_REPORT}"
+                else
+                    log "ERROR" "未找到分析报告"
+                fi
+                ;;
+            0)  break ;;
+            *)  log "ERROR" "无效选择"
+                sleep 1
+                ;;
+        esac
+        
+        [ "$choice" != "2" ] && read -rp "按回车键继续..."
+    done
+}
+
+# 配置菜单
+show_config_menu() {
+    while true; do
+        clear
+        echo -e "${GREEN}配置设置${NC}"
+        echo "==================="
+        echo -e "1. 修改并发数 (当前: ${MAX_CONCURRENT_JOBS:-10})"
+        echo -e "2. 修改超时时间 (当前: ${TIMEOUT_SECONDS:-2}秒)"
+        echo -e "3. 修改重试次数 (当前: ${RETRIES:-2}次)"
+        echo -e "4. 修改测试端口 (当前: ${TEST_PORTS[*]:-8899 8900 8001 8000})"
+        echo -e "5. 重置为默认配置"
+        echo -e "0. 返回主菜单"
+        echo
+        echo -ne "请选择 [0-5]: "
+        read -r choice
+
+        case $choice in
+            1)  echo -ne "请输入新的并发数 [1-50]: "
+                read -r new_jobs
+                if [[ "$new_jobs" =~ ^[1-9][0-9]?$ ]] && [ "$new_jobs" -le 50 ]; then
+                    sed -i "s/MAX_CONCURRENT_JOBS=.*/MAX_CONCURRENT_JOBS=$new_jobs/" "$CONFIG_FILE"
+                    log "SUCCESS" "并发数已更新为: $new_jobs"
+                else
+                    log "ERROR" "无效的并发数"
+                fi
+                ;;
+            2)  echo -ne "请输入新的超时时间 (秒) [1-10]: "
+                read -r new_timeout
+                if [[ "$new_timeout" =~ ^[1-9][0]?$ ]]; then
+                    sed -i "s/TIMEOUT_SECONDS=.*/TIMEOUT_SECONDS=$new_timeout/" "$CONFIG_FILE"
+                    log "SUCCESS" "超时时间已更新为: ${new_timeout}秒"
+                else
+                    log "ERROR" "无效的超时时间"
+                fi
+                ;;
+            3)  echo -ne "请输入新的重试次数 [1-5]: "
+                read -r new_retries
+                if [[ "$new_retries" =~ ^[1-5]$ ]]; then
+                    sed -i "s/RETRIES=.*/RETRIES=$new_retries/" "$CONFIG_FILE"
+                    log "SUCCESS" "重试次数已更新为: $new_retries"
+                else
+                    log "ERROR" "无效的重试次数"
+                fi
+                ;;
+            4)  echo -ne "请输入测试端口 (空格分隔): "
+                read -r new_ports
+                if [[ "$new_ports" =~ ^[0-9\ ]+$ ]]; then
+                    sed -i "s/TEST_PORTS=.*/TEST_PORTS=(${new_ports})/" "$CONFIG_FILE"
+                    log "SUCCESS" "测试端口已更新为: $new_ports"
+                else
+                    log "ERROR" "无效的端口格式"
+                fi
+                ;;
+            5)  create_default_config
+                log "SUCCESS" "配置已重置为默认值"
+                ;;
+            0)  break ;;
+            *)  log "ERROR" "无效选择"
+                ;;
+        esac
+        read -rp "按回车键继续..."
+    done
+    
+    # 重新加载配置
+    load_config
+}
+
+
 # 主函数
 main() {
     local cmd="${1:-}"
