@@ -35,6 +35,36 @@ VERSION="v1.3.0"
 # 创建必要的目录
 mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
 
+# 位置翻译字典
+declare -A LOCATION_TRANS=(
+    ["Singapore"]="新加坡"
+    ["Tokyo"]="东京"
+    ["Seoul"]="首尔"
+    ["Hong Kong"]="香港"
+    ["Frankfurt"]="法兰克福"
+    ["London"]="伦敦"
+    ["New York"]="纽约"
+    ["Amsterdam"]="阿姆斯特丹"
+    ["Paris"]="巴黎"
+    ["Sydney"]="悉尼"
+    ["San Francisco"]="旧金山"
+    ["Toronto"]="多伦多"
+    ["Mumbai"]="孟买"
+    ["Bangalore"]="班加罗尔"
+    ["Berlin"]="柏林"
+    ["SG"]="新加坡"
+    ["JP"]="日本"
+    ["KR"]="韩国"
+    ["HK"]="香港"
+    ["DE"]="德国"
+    ["GB"]="英国"
+    ["US"]="美国"
+    ["NL"]="荷兰"
+    ["FR"]="法国"
+    ["AU"]="澳大利亚"
+    ["IN"]="印度"
+)
+
 # 格式化数字
 format_number() {
     printf "%'d" "$1"
@@ -62,24 +92,90 @@ log() {
 
 # 显示菜单
 show_menu() {
-    clear  # 清屏，让显示更整洁
-    echo -e "\n${GREEN}▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄${NC}"
-    echo -e "${GREEN}█       Solana 验证者节点延迟分析工具       █${NC}"
-    echo -e "${GREEN}█                ${WHITE}版本: ${VERSION}${GREEN}                █${NC}"
-    echo -e "${GREEN}▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀${NC}"
-    echo -e ""
-    echo -e "${GREEN}╔════════════════ 功能菜单 ═══════════════╗${NC}"
-    echo -e "${GREEN}║                                         ║${NC}"
-    echo -e "${GREEN}║  ${WHITE}1${GREEN}. ${WHITE}分析所有验证者节点延迟             ${GREEN}║${NC}"
-    echo -e "${GREEN}║  ${WHITE}2${GREEN}. ${WHITE}在后台分析所有节点                 ${GREEN}║${NC}"
-    echo -e "${GREEN}║  ${WHITE}3${GREEN}. ${WHITE}测试指定IP的延迟                   ${GREEN}║${NC}"
-    echo -e "${GREEN}║  ${WHITE}4${GREEN}. ${WHITE}查看最新分析报告                   ${GREEN}║${NC}"
-    echo -e "${GREEN}║  ${WHITE}5${GREEN}. ${WHITE}查看后台任务状态                   ${GREEN}║${NC}"
-    echo -e "${GREEN}║  ${RED}0${GREEN}. ${RED}退出程序                           ${GREEN}║${NC}"
-    echo -e "${GREEN}║                                         ║${NC}"
-    echo -e "${GREEN}╚═════════════════════════════════════════╝${NC}"
-    echo -e ""
-    echo -ne "${GREEN}请输入您的选择 ${WHITE}[0-5]${GREEN}: ${NC}"
+    clear
+    echo
+    echo -e "${GREEN}Solana 验证者节点延迟分析工具${NC}"
+    echo -e "${GREEN}版本: ${VERSION}${NC}"
+    echo
+    echo -e "${GREEN}功能菜单${NC}"
+    echo -e "${GREEN}1.${NC} 分析所有验证者节点延迟"
+    echo -e "${GREEN}2.${NC} 在后台分析所有节点"
+    echo -e "${GREEN}3.${NC} 测试指定IP的延迟"
+    echo -e "${GREEN}4.${NC} 查看最新分析报告"
+    echo -e "${GREEN}5.${NC} 查看后台任务状态"
+    echo -e "${RED}0.${NC} 退出程序"
+    echo
+    echo -ne "${GREEN}请输入您的选择 [0-5]: ${NC}"
+}
+
+# 获取位置中文翻译
+get_location_cn() {
+    local location="$1"
+    local cn_name=""
+    
+    # 遍历位置字符串中的所有部分
+    for key in "${!LOCATION_TRANS[@]}"; do
+        if [[ "$location" == *"$key"* ]]; then
+            if [ -n "$cn_name" ]; then
+                cn_name="${cn_name},"
+            fi
+            cn_name="${cn_name}${LOCATION_TRANS[$key]}"
+        fi
+    done
+    
+    if [ -z "$cn_name" ]; then
+        echo "$location"
+    else
+        echo "$cn_name"
+    fi
+}
+
+# 更新进度显示
+update_progress() {
+    local current="$1"
+    local total="$2"
+    local ip="$3"
+    local latency="$4"
+    local location="$5"
+    
+    local progress=$((current * 100 / total))
+    
+    # 根据延迟值设置颜色
+    local latency_color
+    local latency_display
+    if [ "$latency" = "999" ]; then
+        latency_color=$RED
+        latency_display="超时"
+    elif [ "$latency" -lt 100 ]; then
+        latency_color=$GREEN
+        latency_display="${latency}ms"
+    else
+        latency_color=$YELLOW
+        latency_display="${latency}ms"
+    fi
+    
+    # 进度条 (使用绿色方块)
+    local bar_size=20
+    local completed=$((progress * bar_size / 100))
+    local remaining=$((bar_size - completed))
+    local progress_bar=""
+    
+    # 只在有进度时显示绿色方块
+    if [ $completed -gt 0 ]; then
+        for ((i=0; i<completed; i++)); do 
+            progress_bar+="${GREEN}█${NC}"
+        done
+    fi
+    for ((i=0; i<remaining; i++)); do 
+        progress_bar+=" "
+    done
+
+    # 获取位置的中文翻译
+    local location_cn=$(get_location_cn "$location")
+    
+    # 格式化进度显示
+    printf "\r[%s] %3d%% | ${CYAN}%-15s${NC} | 延迟: ${latency_color}%-8s${NC} | 位置: ${WHITE}%-20s${NC}" \
+        "$progress_bar" "$progress" "$ip" "$latency_display" "$location_cn"
 }
 
 # 测试网络质量
@@ -175,43 +271,6 @@ get_validators() {
     return 0
 }
 
-# 更新进度显示
-update_progress() {
-    local current="$1"
-    local total="$2"
-    local ip="$3"
-    local latency="$4"
-    local location="$5"
-    
-    local progress=$((current * 100 / total))
-    
-    # 根据延迟值设置颜色
-    local latency_color
-    local latency_display
-    if [ "$latency" = "999" ]; then
-        latency_color=$RED
-        latency_display="超时"
-    elif [ "$latency" -lt 100 ]; then
-        latency_color=$GREEN
-        latency_display="${latency}ms"
-    else
-        latency_color=$YELLOW
-        latency_display="${latency}ms"
-    fi
-    
-    # 进度条
-    local bar_size=20
-    local completed=$((progress * bar_size / 100))
-    local remaining=$((bar_size - completed))
-    local progress_bar=""
-    for ((i=0; i<completed; i++)); do progress_bar+="█"; done
-    for ((i=0; i<remaining; i++)); do progress_bar+="░"; done
-    
-    # 格式化进度显示
-    printf "\r${GREEN}[%s] %3d%%${NC} | ${CYAN}%-15s${NC} | 延迟: ${latency_color}%-8s${NC} | 位置: ${WHITE}%-20s${NC}" \
-        "$progress_bar" "$progress" "$ip" "$latency_display" "${location:-Unknown}"
-}
-
 # 分析验证者节点
 analyze_validators() {
     local background="${1:-false}"
@@ -270,19 +329,20 @@ generate_report() {
         echo
         
         echo -e "${GREEN}## 延迟统计 (Top 20)${NC}"
-        echo "| %-15s | %-25s | %-10s | %-20s |" "IP地址" "位置" "延迟(ms)" "供应商"
-        echo "|-----------------|---------------------------|------------|---------------------|"
+        echo "| IP地址          | 位置                  | 延迟(ms)   | 供应商               |"
+        echo "|-----------------|----------------------|------------|---------------------|"
         
         sort -t'|' -k4 -n "${RESULTS_FILE}" | head -20 | while IFS='|' read -r ip provider location latency; do
             if [ "$latency" != "999" ]; then
-                printf "| %-15s | %-25s | %-10s | %-20s |\n" \
-                    "$ip" "${location:-Unknown}" "$latency" "${provider:-Unknown}"
+                local location_cn=$(get_location_cn "$location")
+                printf "| %-15s | %-20s | %-10s | %-20s |\n" \
+                    "$ip" "$location_cn" "$latency" "$provider"
             fi
         done
         
         echo
         echo -e "${GREEN}## 供应商分布${NC}"
-        echo "| %-20s | %-10s | %-15s |" "供应商" "节点数量" "平均延迟(ms)"
+        echo "| 供应商               | 节点数量    | 平均延迟(ms)    |"
         echo "|---------------------|------------|-----------------|"
         
         awk -F'|' '$4!=999 {
@@ -300,8 +360,8 @@ generate_report() {
         
         echo
         echo -e "${GREEN}## 位置分布${NC}"
-        echo "| %-25s | %-10s | %-15s |" "位置" "节点数量" "平均延迟(ms)"
-        echo "|---------------------------|------------|-----------------|"
+        echo "| 位置                  | 节点数量    | 平均延迟(ms)    |"
+        echo "|----------------------|------------|-----------------|"
         
         awk -F'|' '$4!=999 {
             count[$3]++
@@ -309,21 +369,24 @@ generate_report() {
         }
         END {
             for (location in count) {
-                printf "| %-25s | %-10d | %-15.2f |\n", 
+                printf "| %-20s | %-10d | %-15.2f |\n", 
                     location, 
                     count[location], 
                     latency_sum[location]/count[location]
             }
-        }' "${RESULTS_FILE}" | sort -t'|' -k3 -n
+        }' "${RESULTS_FILE}" | sort -t'|' -k3 -n | while IFS='|' read -r line; do
+            local location=$(echo "$line" | awk -F'|' '{print $1}')
+            local location_cn=$(get_location_cn "$location")
+            echo "$line" | sed "s|$location|$location_cn|"
+        done
 
         echo
         echo -e "${GREEN}## 部署建议${NC}"
         echo "根据延迟测试结果，以下是推荐的部署方案（按优先级排序）："
         echo
         echo "### 最优部署方案"
-        echo "| %-15s | %-15s | %-15s | %-12s | %-15s | %-10s |" \
-            "供应商" "数据中心位置" "IP网段" "平均延迟" "测试IP" "测试延迟"
-        echo "|-----------------|-----------------|-----------------|--------------|-----------------|------------|"
+        echo "| 供应商          | 数据中心位置        | IP网段          | 平均延迟     | 测试IP          | 测试延迟    |"
+        echo "|-----------------|-------------------|----------------|------------|-----------------|------------|"
         
         # 从结果文件中提取最优的部署方案
         awk -F'|' '$4!=999 {
@@ -350,7 +413,7 @@ generate_report() {
             for (key in count) {
                 split(key, parts, "|")
                 avg_latency = latency_sum[key]/count[key]
-                printf "| %-15s | %-15s | %-15s | %-11.2fms | %-15s | %-9dms |\n", 
+                printf "| %-15s | %-17s | %-14s | %-10.2fms | %-15s | %-9dms |\n", 
                     parts[1],    # 供应商
                     parts[2],    # 位置
                     parts[3],    # 网段
@@ -358,20 +421,24 @@ generate_report() {
                     best_ip[key],# 测试IP
                     min_latency[key] # 最低延迟
             }
-        }' "${RESULTS_FILE}" | sort -t'|' -k4 -n | head -5
+        }' "${RESULTS_FILE}" | sort -t'|' -k4 -n | head -5 | while IFS='|' read -r line; do
+            local location=$(echo "$line" | awk -F'|' '{print $2}')
+            local location_cn=$(get_location_cn "$location")
+            echo "$line" | sed "s|$location|$location_cn|"
+        done
         
         echo
         echo "### 部署建议详情"
         echo
         echo "1. 优选部署方案"
         printf "   %-15s %s\n" "推荐供应商:" "Tencent Cloud, AWS, Alibaba Cloud"
-        printf "   %-15s %s\n" "推荐地区:" "Singapore, Tokyo, Seoul"
+        printf "   %-15s %s\n" "推荐地区:" "新加坡, 东京, 首尔"
         printf "   %-15s %s\n" "网络要求:" "公网带宽 ≥ 100Mbps"
         printf "   %-15s %s\n" "预期延迟:" "10-30ms"
         echo
         echo "2. 备选部署方案"
         printf "   %-15s %s\n" "备选供应商:" "DigitalOcean, Google Cloud"
-        printf "   %-15s %s\n" "备选地区:" "Hong Kong, Frankfurt"
+        printf "   %-15s %s\n" "备选地区:" "香港, 法兰克福"
         printf "   %-15s %s\n" "网络要求:" "公网带宽 ≥ 100Mbps"
         printf "   %-15s %s\n" "预期延迟:" "30-50ms"
         echo
@@ -473,14 +540,14 @@ cleanup() {
 test_single_ip() {
     local ip="$1"
     
-    echo -e "\n${GREEN}╔════════════════ IP测试 ═════════════════╗${NC}"
-    echo -e "${GREEN}║                                         ║${NC}"
-    echo -e "${GREEN}║  ${WHITE}测试IP: ${CYAN}%-30s${GREEN}║${NC}" "$ip"
+    echo -e "\n${GREEN}测试 IP: ${CYAN}$ip${NC}"
+    echo -e "${GREEN}===================${NC}"
     
     local latency=$(test_network_quality "$ip")
     local dc_info=$(identify_datacenter "$ip")
     local provider=$(echo "$dc_info" | cut -d'|' -f1)
     local location=$(echo "$dc_info" | cut -d'|' -f2)
+    local location_cn=$(get_location_cn "$location")
     
     # 根据延迟值设置颜色
     local latency_color
@@ -493,33 +560,27 @@ test_single_ip() {
         latency_color=$YELLOW
     fi
     
-    echo -e "${GREEN}║  ${WHITE}延迟: ${latency_color}%-30s${GREEN}║${NC}" "${latency}ms"
-    echo -e "${GREEN}║  ${WHITE}位置: ${WHITE}%-30s${GREEN}║${NC}" "$location"
-    echo -e "${GREEN}║  ${WHITE}供应商: ${CYAN}%-28s${GREEN}║${NC}" "$provider"
-    echo -e "${GREEN}║                                         ║${NC}"
-    echo -e "${GREEN}╚═════════════════════════════════════════╝${NC}"
+    echo -e "延迟: ${latency_color}${latency}ms${NC}"
+    echo -e "位置: ${WHITE}${location_cn} (${location})${NC}"
+    echo -e "供应商: ${CYAN}${provider}${NC}"
+    echo -e "${GREEN}===================${NC}"
 }
 
 # 检查后台任务状态
 check_background_task() {
     if [ -f "${BACKGROUND_LOG}" ]; then
-        echo -e "\n${GREEN}╔═══════════════ 任务状态 ════════════════╗${NC}"
-        echo -e "${GREEN}║                                         ║${NC}"
+        echo -e "\n${GREEN}后台任务状态：${NC}"
+        echo -e "${GREEN}===================${NC}"
         
         if grep -q "分析完成" "${BACKGROUND_LOG}"; then
-            echo -e "${GREEN}║  ${WHITE}状态: ${GREEN}已完成                          ${GREEN}║${NC}"
+            echo -e "${GREEN}状态: 已完成${NC}"
         else
-            echo -e "${GREEN}║  ${WHITE}状态: ${YELLOW}运行中                          ${GREEN}║${NC}"
+            echo -e "${YELLOW}状态: 运行中${NC}"
         fi
         
-        echo -e "${GREEN}║                                         ║${NC}"
-        echo -e "${GREEN}║  ${WHITE}最新进度:                              ${GREEN}║${NC}"
-        tail -n 5 "${BACKGROUND_LOG}" | while read -r line; do
-            printf "${GREEN}║  ${WHITE}%-39s${GREEN}║${NC}\n" "$line"
-        done
-        
-        echo -e "${GREEN}║                                         ║${NC}"
-        echo -e "${GREEN}╚═════════════════════════════════════════╝${NC}"
+        echo -e "\n最新进度:"
+        tail -n 5 "${BACKGROUND_LOG}"
+        echo -e "${GREEN}===================${NC}"
     else
         echo -e "\n${YELLOW}没有运行中的后台任务${NC}"
     fi
@@ -599,3 +660,4 @@ main() {
 
 # 启动程序
 main "$@"
+
