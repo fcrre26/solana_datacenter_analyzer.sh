@@ -210,11 +210,218 @@ install_solana_cli() {
 }
 
 # 获取IP信息
-# ... existing code ...
+# IP 数据库管理
+IP_DB_DIR="${REPORT_DIR}/ip_db"
+IP_DB_FILE="${IP_DB_DIR}/ip_ranges.db"
+IP_DB_VERSION_FILE="${IP_DB_DIR}/version.txt"
+IP_DB_LAST_UPDATE="${IP_DB_DIR}/last_update"
+IP_DB_CACHE_DIR="${IP_DB_DIR}/cache"
+
+# 初始化 IP 数据库目录
+init_ip_db() {
+    mkdir -p "${IP_DB_DIR}" "${IP_DB_CACHE_DIR}"
+    touch "${IP_DB_LAST_UPDATE}"
+    
+    # 如果配置文件不存在，创建默认配置
+    if [ ! -f "${IP_DB_DIR}/config.conf" ]; then
+        cat > "${IP_DB_DIR}/config.conf" <<EOF
+# API Keys Configuration
+MAXMIND_LICENSE_KEY=""
+IPINFO_TOKEN=""
+IP2LOCATION_TOKEN=""
+# Update Intervals (in seconds)
+CLOUD_UPDATE_INTERVAL=604800  # 7 days
+GEODB_UPDATE_INTERVAL=2592000 # 30 days
+BGP_UPDATE_INTERVAL=86400     # 1 day
+EOF
+    fi
+    
+    # 加载配置
+    source "${IP_DB_DIR}/config.conf"
+}
+
+# 更新 IP 数据库
+update_ip_database() {
+    log "INFO" "正在更新 IP 数据库..."
+    local temp_dir="${TEMP_DIR}/ip_db_update"
+    mkdir -p "$temp_dir"
+
+    # 1. 主要云服务商
+    {
+        # AWS
+        log "INFO" "更新 AWS IP 范围..."
+        if curl -s "https://ip-ranges.amazonaws.com/ip-ranges.json" -o "${temp_dir}/aws.json"; then
+            jq -r '.prefixes[] | select(.service=="EC2" or .service=="AMAZON") | .ip_prefix' "${temp_dir}/aws.json" > "${temp_dir}/aws_ranges.txt"
+        fi
+        
+        # Azure
+        log "INFO" "更新 Azure IP 范围..."
+        if curl -s "https://download.microsoft.com/download/7/1/D/71D86715-5596-4529-9B13-DA13A5DE5B63/ServiceTags_Public.json" -o "${temp_dir}/azure.json"; then
+            jq -r '.values[] | select(.name=="AzureCloud") | .properties.addressPrefixes[]' "${temp_dir}/azure.json" > "${temp_dir}/azure_ranges.txt"
+        fi
+        
+        # Google Cloud
+        log "INFO" "更新 Google Cloud IP 范围..."
+        if curl -s "https://www.gstatic.com/ipranges/cloud.json" -o "${temp_dir}/gcp.json"; then
+            jq -r '.prefixes[] | select(.ipv4Prefix!=null) | .ipv4Prefix' "${temp_dir}/gcp.json" > "${temp_dir}/gcp_ranges.txt"
+        fi
+        
+        # Oracle Cloud
+        log "INFO" "更新 Oracle Cloud IP 范围..."
+        if curl -s "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json" -o "${temp_dir}/oracle.json"; then
+            jq -r '.regions[].cidrs[].cidr' "${temp_dir}/oracle.json" > "${temp_dir}/oracle_ranges.txt"
+        fi
+    } &
+
+    # 2. 亚太区云服务商
+    {
+        # 阿里云
+        log "INFO" "更新阿里云 IP 范围..."
+        if curl -s "https://raw.githubusercontent.com/alibaba/alibaba-cloud-sdk-go/master/services/ecs/ip_ranges.json" -o "${temp_dir}/alicloud.json"; then
+            jq -r '.[] | .IpAddress[]' "${temp_dir}/alicloud.json" > "${temp_dir}/alicloud_ranges.txt"
+        fi
+        
+        # 腾讯云 (使用公开的 BGP 数据)
+        log "INFO" "更新腾讯云 IP 范围..."
+        curl -s "https://bgp.he.net/AS45090" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' > "${temp_dir}/tencent_ranges.txt"
+        
+        # 华为云
+        log "INFO" "更新华为云 IP 范围..."
+        curl -s "https://bgp.he.net/AS55990" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' > "${temp_dir}/huawei_ranges.txt"
+    } &
+
+    # 3. 欧美主要服务商
+    {
+        # DigitalOcean
+        log "INFO" "更新 DigitalOcean IP 范围..."
+        if curl -s "https://digitalocean.com/geo/google.csv" -o "${temp_dir}/do.csv"; then
+            awk -F',' '{print $1}' "${temp_dir}/do.csv" > "${temp_dir}/do_ranges.txt"
+        fi
+        
+        # Vultr
+        log "INFO" "更新 Vultr IP 范围..."
+        curl -s "https://bgp.he.net/AS20473" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' > "${temp_dir}/vultr_ranges.txt"
+        
+        # Linode
+        log "INFO" "更新 Linode IP 范围..."
+        curl -s "https://bgp.he.net/AS63949" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' > "${temp_dir}/linode_ranges.txt"
+        
+        # OVH
+        log "INFO" "更新 OVH IP 范围..."
+        curl -s "https://bgp.he.net/AS16276" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' > "${temp_dir}/ovh_ranges.txt"
+        
+        # Hetzner
+        log "INFO" "更新 Hetzner IP 范围..."
+        curl -s "https://bgp.he.net/AS24940" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' > "${temp_dir}/hetzner_ranges.txt"
+    } &
+
+    # 4. CDN 和边缘服务商
+    {
+        # Cloudflare
+        log "INFO" "更新 Cloudflare IP 范围..."
+        if curl -s "https://api.cloudflare.com/client/v4/ips" -o "${temp_dir}/cloudflare.json"; then
+            jq -r '.result.ipv4_cidrs[]' "${temp_dir}/cloudflare.json" > "${temp_dir}/cloudflare_ranges.txt"
+        fi
+        
+        # Fastly
+        log "INFO" "更新 Fastly IP 范围..."
+        if curl -s "https://api.fastly.com/public-ip-list" -o "${temp_dir}/fastly.json"; then
+            jq -r '.addresses[]' "${temp_dir}/fastly.json" > "${temp_dir}/fastly_ranges.txt"
+        fi
+    } &
+
+    # 等待所有后台任务完成
+    wait
+
+    # 合并所有数据
+    {
+        echo "# IP 范围数据库"
+        echo "# 更新时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo
+
+        # 处理每个服务商的数据
+        process_provider_ranges "AWS" "aws_ranges.txt" "${temp_dir}"
+        process_provider_ranges "AZURE" "azure_ranges.txt" "${temp_dir}"
+        process_provider_ranges "GCP" "gcp_ranges.txt" "${temp_dir}"
+        process_provider_ranges "ORACLE" "oracle_ranges.txt" "${temp_dir}"
+        process_provider_ranges "ALICLOUD" "alicloud_ranges.txt" "${temp_dir}"
+        process_provider_ranges "TENCENT" "tencent_ranges.txt" "${temp_dir}"
+        process_provider_ranges "HUAWEI" "huawei_ranges.txt" "${temp_dir}"
+        process_provider_ranges "DO" "do_ranges.txt" "${temp_dir}"
+        process_provider_ranges "VULTR" "vultr_ranges.txt" "${temp_dir}"
+        process_provider_ranges "LINODE" "linode_ranges.txt" "${temp_dir}"
+        process_provider_ranges "OVH" "ovh_ranges.txt" "${temp_dir}"
+        process_provider_ranges "HETZNER" "hetzner_ranges.txt" "${temp_dir}"
+        process_provider_ranges "CLOUDFLARE" "cloudflare_ranges.txt" "${temp_dir}"
+        process_provider_ranges "FASTLY" "fastly_ranges.txt" "${temp_dir}"
+    } > "$IP_DB_FILE"
+
+    # 更新时间戳
+    date +%s > "${IP_DB_LAST_UPDATE}"
+    
+    # 清理临时文件
+    rm -rf "$temp_dir"
+    
+    log "SUCCESS" "IP 数据库更新完成"
+}
+# 处理服务商 IP 范围
+process_provider_ranges() {
+    local provider="$1"
+    local file="$2"
+    local dir="$3"
+    
+    if [ -f "${dir}/${file}" ]; then
+        echo "# ${provider}"
+        while read -r range; do
+            echo "${provider}|${range}"
+        done < "${dir}/${file}"
+        echo
+    fi
+}
+
+# 检查 IP 是否在范围内
+check_ip_in_range() {
+    local ip="$1"
+    local range="$2"
+    
+    # 将 IP 地址转换为数字
+    local IFS='.'
+    read -r -a ip_parts <<< "$ip"
+    local ip_num=$(( (${ip_parts[0]} << 24) + (${ip_parts[1]} << 16) + (${ip_parts[2]} << 8) + ${ip_parts[3]} ))
+    
+    # 处理 CIDR 范围
+    local network="${range%/*}"
+    local bits="${range#*/}"
+    read -r -a net_parts <<< "$network"
+    local net_num=$(( (${net_parts[0]} << 24) + (${net_parts[1]} << 16) + (${net_parts[2]} << 8) + ${net_parts[3]} ))
+    
+    local mask=$(( 0xFFFFFFFF << (32 - bits) ))
+    local net_low=$(( net_num & mask ))
+    local net_high=$(( net_low | ~mask & 0xFFFFFFFF ))
+    
+    # 检查 IP 是否在范围内
+    if (( ip_num >= net_low && ip_num <= net_high )); then
+        return 0
+    fi
+    return 1
+}
+
+# 获取 IP 信息的主函数
 get_ip_info() {
     local ip="$1"
     local max_retries=3
     local retry_count=0
+    local cache_file="${IP_DB_CACHE_DIR}/${ip}"
+    
+    # 检查缓存
+    if [ -f "$cache_file" ]; then
+        local cache_time=$(stat -c %Y "$cache_file")
+        local current_time=$(date +%s)
+        if [ $((current_time - cache_time)) -lt 86400 ]; then  # 24小时缓存
+            cat "$cache_file"
+            return 0
+        fi
+    fi
     
     # 清理字符串函数
     clean_string() {
@@ -223,13 +430,28 @@ get_ip_info() {
         echo "$str" | tr -dc '[:print:]' | sed 's/["\]/\\&/g' | sed 's/[^a-zA-Z0-9.,_ -]//g'
     }
     
-    # 尝试多个 API 获取信息
+    # 尝试从 API 获取信息
     get_info_from_apis() {
         local ip="$1"
-        local info=""
         
-        # 1. 首先尝试 ip-api.com (更可靠的免费 API)
-        info=$(curl -s -m 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as" 2>/dev/null)
+        # 1. ipapi.co
+        local info=$(curl -s -m 3 "https://ipapi.co/${ip}/json/")
+        if [ $? -eq 0 ] && [ "$(echo "$info" | jq -r '.error // empty')" != "true" ]; then
+            local org=$(echo "$info" | jq -r '.org // empty')
+            local asn=$(echo "$info" | jq -r '.asn // empty')
+            local city=$(echo "$info" | jq -r '.city // empty')
+            local country=$(echo "$info" | jq -r '.country_name // empty')
+            
+            if [ -n "$org" ] || [ -n "$asn" ]; then
+                local provider="${org:-$asn}"
+                local location="${city:+$city, }${country}"
+                [ -n "$provider" ] && [ -n "$location" ] && \
+                    echo "{\"provider\":\"$provider\",\"location\":\"$location\"}" && return 0
+            fi
+        fi
+        
+        # 2. ip-api.com
+        info=$(curl -s -m 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as")
         if [ $? -eq 0 ] && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
             local org=$(echo "$info" | jq -r '.org // empty')
             local isp=$(echo "$info" | jq -r '.isp // empty')
@@ -237,88 +459,76 @@ get_ip_info() {
             local city=$(echo "$info" | jq -r '.city // empty')
             local country=$(echo "$info" | jq -r '.country // empty')
             
-            # 组合位置信息
-            local location=""
-            if [ -n "$city" ] && [ -n "$country" ]; then
-                location="${city}, ${country}"
-            elif [ -n "$country" ]; then
-                location="${country}"
-            fi
-            
-            # 组合供应商信息
             local provider=""
-            if [ -n "$as" ]; then
-                provider="$as"
-            elif [ -n "$org" ]; then
-                provider="$org"
-            elif [ -n "$isp" ]; then
-                provider="$isp"
-            fi
+            [ -n "$as" ] && provider="${as#AS*} "
+            [ -n "$org" ] && provider+="$org"
+            [ -z "$provider" ] && [ -n "$isp" ] && provider="$isp"
             
-            if [ -n "$provider" ] && [ -n "$location" ]; then
-                echo "{\"provider\":\"$provider\",\"location\":\"$location\"}"
-                return 0
-            fi
-        fi
-        
-        # 2. 备用：ipinfo.io
-        info=$(curl -s -m 3 "https://ipinfo.io/${ip}/json" 2>/dev/null)
-        if [ $? -eq 0 ] && [ -n "$info" ]; then
-            local org=$(echo "$info" | jq -r '.org // empty')
-            local city=$(echo "$info" | jq -r '.city // empty')
-            local country=$(echo "$info" | jq -r '.country // empty')
-            local region=$(echo "$info" | jq -r '.region // empty')
-            
-            # 组合位置信息
-            local location=""
-            if [ -n "$city" ] && [ -n "$country" ]; then
-                location="${city}, ${country}"
-            elif [ -n "$country" ]; then
-                location="${country}"
-            fi
-            
-            if [ -n "$org" ] && [ -n "$location" ]; then
-                echo "{\"provider\":\"$org\",\"location\":\"$location\"}"
-                return 0
-            fi
-        fi
-        
-        # 3. 使用 whois 作为最后的备选方案
-        local whois_info=$(whois "$ip" 2>/dev/null)
-        if [ $? -eq 0 ]; then
-            local org=$(echo "$whois_info" | grep -i "^Organization:" | head -1 | cut -d: -f2- | xargs)
-            local netname=$(echo "$whois_info" | grep -i "^NetName:" | head -1 | cut -d: -f2- | xargs)
-            local country=$(echo "$whois_info" | grep -i "^Country:" | head -1 | cut -d: -f2- | xargs)
-            
-            if [ -n "$org" ] || [ -n "$netname" ]; then
-                local provider="${org:-$netname}"
-                local location="${country:-Unknown Location}"
-                echo "{\"provider\":\"$provider\",\"location\":\"$location\"}"
-                return 0
-            fi
+            local location="${city:+$city, }${country}"
+            [ -n "$provider" ] && [ -n "$location" ] && \
+                echo "{\"provider\":\"$provider\",\"location\":\"$location\"}" && return 0
         fi
         
         return 1
     }
     
-    # 主逻辑：重试机制
+    # 从数据库查询 IP 所属服务商
+    query_ip_provider() {
+        local ip="$1"
+        
+        # 检查数据库是否需要更新
+        local current_time=$(date +%s)
+        local last_update=0
+        [ -f "${IP_DB_LAST_UPDATE}" ] && last_update=$(cat "${IP_DB_LAST_UPDATE}")
+        
+        if [ $((current_time - last_update)) -gt 604800 ]; then  # 7天更新一次
+            update_ip_database
+        fi
+        
+        # 查询 IP
+        while IFS='|' read -r provider range; do
+            [[ "$provider" =~ ^#|^$ ]] && continue
+            
+            if check_ip_in_range "$ip" "$range"; then
+                case "$provider" in
+                    "AWS") echo '{"provider":"Amazon AWS","location":"Global"}' ;;
+                    "AZURE") echo '{"provider":"Microsoft Azure","location":"Global"}' ;;
+                    "GCP") echo '{"provider":"Google Cloud","location":"Global"}' ;;
+                    "ORACLE") echo '{"provider":"Oracle Cloud","location":"Global"}' ;;
+                    "ALICLOUD") echo '{"provider":"Alibaba Cloud","location":"Global"}' ;;
+                    "TENCENT") echo '{"provider":"Tencent Cloud","location":"Global"}' ;;
+                    "HUAWEI") echo '{"provider":"Huawei Cloud","location":"Global"}' ;;
+                    "DO") echo '{"provider":"DigitalOcean","location":"Global"}' ;;
+                    "VULTR") echo '{"provider":"Vultr","location":"Global"}' ;;
+                    "LINODE") echo '{"provider":"Linode","location":"Global"}' ;;
+                    "OVH") echo '{"provider":"OVH","location":"Global"}' ;;
+                    "HETZNER") echo '{"provider":"Hetzner","location":"Global"}' ;;
+                    "CLOUDFLARE") echo '{"provider":"Cloudflare","location":"Global"}' ;;
+                    "FASTLY") echo '{"provider":"Fastly","location":"Global"}' ;;
+                    *) echo '{"provider":"Unknown Provider","location":"Unknown Location"}' ;;
+                esac
+                return 0
+            fi
+        done < "$IP_DB_FILE"
+        
+        return 1
+    }
+    
+    # 主逻辑
     while [ $retry_count -lt $max_retries ]; do
+        # 首先尝试 API
         local result=$(get_info_from_apis "$ip")
         if [ $? -eq 0 ] && [ -n "$result" ]; then
-            local provider=$(echo "$result" | jq -r '.provider')
-            local location=$(echo "$result" | jq -r '.location')
-            
-            # 清理和标准化结果
-            provider=$(clean_string "$provider")
-            location=$(clean_string "$location")
-            
-            # 处理空值情况
-            [ -z "$provider" ] && provider="Unknown Provider"
-            [ -z "$location" ] && location="Unknown Location"
-            
-            # 返回结果
-            printf '{"ip":"%s","provider":"%s","location":"%s"}' \
-                   "$ip" "$provider" "$location"
+            echo "$result" > "$cache_file"
+            echo "$result"
+            return 0
+        fi
+        
+        # 如果 API 失败，尝试数据库查询
+        result=$(query_ip_provider "$ip")
+        if [ $? -eq 0 ] && [ -n "$result" ]; then
+            echo "$result" > "$cache_file"
+            echo "$result"
             return 0
         fi
         
@@ -326,11 +536,15 @@ get_ip_info() {
         [ $retry_count -lt $max_retries ] && sleep 1
     done
     
-    # 如果所有尝试都失败，返回默认值
-    printf '{"ip":"%s","provider":"Unknown Provider","location":"Unknown Location"}' "$ip"
+    # 如果所有方法都失败，返回默认值
+    local default_result='{"provider":"Unknown Provider","location":"Unknown Location"}'
+    echo "$default_result" > "$cache_file"
+    echo "$default_result"
     return 0
 }
 
+# 初始化数据库
+init_ip_db
 
 # 测试网络质量
 test_network_quality() {
