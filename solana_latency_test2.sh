@@ -1215,11 +1215,6 @@ show_config_menu() {
     # 重新加载配置
     load_config
 }
-    
-    # 重新加载配置
-    load_config
-}
-
 
 # 主函数
 main() {
