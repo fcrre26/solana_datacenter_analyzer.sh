@@ -285,39 +285,318 @@ declare -A DATACENTER_INFO=(
     ["na-siliconvalley"]="腾讯云硅谷 SV-金融云"
     ["na-ashburn"]="腾讯云弗吉尼亚 IAD-金融云"
 )
+
 # IP 地理位置查询函数
 get_ip_location() {
     local ip="$1"
     local location=""
     
     # 方法1: 使用 ipinfo.io API
-    location=$(curl -s --max-time 3 "https://ipinfo.io/${ip}/json" | jq -r 'if .city and .region and .country then .city + ", " + .region + ", " + .country else "Unknown" end' 2>/dev/null)
+    location=$(curl -s "https://ipinfo.io/${ip}/json" | jq -r '.city + ", " + .region + ", " + .country' 2>/dev/null)
     
     # 如果 ipinfo.io 失败，尝试方法2: 使用 ip-api.com
-    if [ -z "$location" ] || [ "$location" = "null" ] || [ "$location" = "Unknown" ]; then
-        location=$(curl -s --max-time 3 "http://ip-api.com/json/${ip}" | jq -r 'if .status == "success" then .city + ", " + .regionName + ", " + .country else "Unknown" end' 2>/dev/null)
+    if [ -z "$location" ] || [ "$location" = "null, null, null" ]; then
+        location=$(curl -s "http://ip-api.com/json/${ip}" | jq -r '.city + ", " + .regionName + ", " + .country' 2>/dev/null)
     fi
     
     # 如果还是失败，尝试方法3: 使用 GeoIP 数据库
-    if [ -z "$location" ] || [ "$location" = "null" ] || [ "$location" = "Unknown" ]; then
+    if [ -z "$location" ] || [ "$location" = "null, null, null" ]; then
         if command -v geoiplookup >/dev/null 2>&1; then
-            location=$(geoiplookup "$ip" 2>/dev/null | grep "GeoIP City" | cut -d':' -f2- | sed 's/^[[:space:]]*//' || echo "Unknown")
+            location=$(geoiplookup "$ip" | grep "GeoIP City" | cut -d':' -f2- | xargs)
         fi
     fi
     
-    # 清理输出
-    location=$(echo "$location" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    echo "${location:-Unknown}"
+}
+
+# 增强的数据中心识别函数
+identify_datacenter() {
+    local ip="$1"
+    local asn_info
+    asn_info=$(whois -h whois.cymru.com " -v $ip" 2>/dev/null)
     
-    # 确保返回有效的位置信息
-    if [ -z "$location" ] || [ "$location" = "null" ] || [ "$location" = "Unknown" ]; then
-        echo "Unknown Location"
+    if [ $? -eq 0 ]; then
+        local asn_org
+        asn_org=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $6}' | xargs)
+        local asn_num
+        asn_num=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $1}' | xargs)
+        local asn_country
+        asn_country=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $3}' | xargs)
+        
+        # 获取详细的地理位置信息
+        local location=$(get_ip_location "$ip")
+        local datacenter_location=""
+        local provider=""
+        
+        # 获取更详细的 IP 信息
+        local ip_info
+        ip_info=$(curl -s "https://ipapi.co/${ip}/json/" 2>/dev/null)
+        local isp=$(echo "$ip_info" | jq -r '.org // empty')
+        local city=$(echo "$ip_info" | jq -r '.city // empty')
+        local region=$(echo "$ip_info" | jq -r '.region // empty')
+        local country=$(echo "$ip_info" | jq -r '.country_name // empty')
+        
+        # 根据 ASN 和组织名称识别供应商
+        case "$asn_org" in
+            *"Amazon"*|*"AWS"*|*"AMAZON"*|*"AMAZONAWS"*)
+                provider="AWS"
+                ;;
+            *"Google"*|*"GCP"*|*"GOOGLE"*|*"GOOGLECLOUD"*)
+                provider="GCP"
+                ;;
+            *"Alibaba"*|*"Aliyun"*|*"ALIBABA"*|*"ALICLOUD"*)
+                provider="阿里云"
+                ;;
+            *"Microsoft"*|*"Azure"*|*"MICROSOFT"*|*"MSFT"*)
+                provider="Azure"
+                ;;
+            *"Tencent"*|*"TENCENT"*|*"腾讯"*)
+                provider="腾讯云"
+                ;;
+            *"Oracle"*|*"ORACLE"*|*"OPC"*)
+                provider="Oracle Cloud"
+                ;;
+            *"DigitalOcean"*|*"DIGITALOCEAN"*|*"DO"*)
+                provider="DigitalOcean"
+                ;;
+            *"OVH"*|*"OVHCLOUD"*)
+                provider="OVH"
+                ;;
+            *"Linode"*|*"LINODE"*|*"AKAMAI"*)
+                provider="Linode"
+                ;;
+            *"Vultr"*|*"VULTR"*|*"CHOOPA"*)
+                provider="Vultr"
+                ;;
+            *"Hetzner"*|*"HETZNER"*)
+                provider="Hetzner"
+                ;;
+            *"IONOS"*|*"1AND1"*)
+                provider="IONOS"
+                ;;
+            *"Cloudflare"*|*"CLOUDFLARE"*)
+                provider="Cloudflare"
+                ;;
+            *"Scaleway"*|*"SCALEWAY"*)
+                provider="Scaleway"
+                ;;
+            *"UpCloud"*|*"UPCLOUD"*)
+                provider="UpCloud"
+                ;;
+            *"Baidu"*|*"BAIDU"*|*"百度"*)
+                provider="百度云"
+                ;;
+            *"Huawei"*|*"HUAWEI"*|*"华为"*)
+                provider="华为云"
+                ;;
+            *"JD"*|*"JDCLOUD"*|*"京东"*)
+                provider="京东云"
+                ;;
+            *"QINIU"*|*"七牛"*)
+                provider="七牛云"
+                ;;
+            *"UCloud"*|*"UCLOUD"*)
+                provider="UCloud"
+                ;;
+            *"KINGSOFT"*|*"金山"*)
+                provider="金山云"
+                ;;
+            *"CTYUN"*|*"天翼"*)
+                provider="天翼云"
+                ;;
+            *"HWCLOUDS"*|*"HUAWEICLOUD"*)
+                provider="华为云"
+                ;;
+            *"BAIDUBCE"*|*"BAIDUCLOUD"*)
+                provider="百度智能云"
+                ;;
+            *"QINGCLOUD"*|*"青云"*)
+                provider="青云QingCloud"
+                ;;
+            *"VOLCENGINE"*|*"火山"*)
+                provider="火山引擎"
+                ;;
+            *"CHINAMOBILE"*|*"移动"*)
+                provider="移动云"
+                ;;
+            *"CHINAUNICOM"*|*"联通"*)
+                provider="联通云"
+                ;;
+            *"CHINATELECOM"*|*"电信"*)
+                provider="电信云"
+                ;;
+            # 新增更多专业主机商
+            *"HOSTINGER"*)
+                provider="Hostinger"
+                ;;
+            *"GODADDY"*)
+                provider="GoDaddy"
+                ;;
+            *"RACKSPACE"*)
+                provider="Rackspace"
+                ;;
+            *"SOFTLAYER"*)
+                provider="IBM Cloud"
+                ;;
+            *"LEASEWEB"*)
+                provider="LeaseWeb"
+                ;;
+            *"DREAMHOST"*)
+                provider="DreamHost"
+                ;;
+            *"BLUEHOST"*)
+                provider="Bluehost"
+                ;;
+            *"HOSTGATOR"*)
+                provider="HostGator"
+                ;;
+            *"DIGITALREALTY"*)
+                provider="Digital Realty"
+                ;;
+            *"EQUINIX"*)
+                provider="Equinix"
+                ;;
+            *)
+                # 未知供应商的增强识别
+                local org_name
+                # 1. 清理组织名称中的常见后缀和无关词
+                org_name=$(echo "$asn_org" | sed -E '
+                    s/\b(AS|LLC|INC|LTD|CORPORATION|TECHNOLOGIES|TECHNOLOGY|NETWORKS?|CLOUD|LIMITED|CO|HOSTING|DATACENTER|DATA|CENTER|TELECOM|COMMUNICATION|COMMUNICATIONS|GROUP|ENTERPRISE|ENTERPRISES|SOLUTION|SOLUTIONS)\b//gi' |
+                    sed 's/[,.]//g' | # 删除逗号和句点
+                    sed 's/\s\+/ /g' | # 压缩多个空格
+                    xargs) # 清理首尾空格
+                
+                # 2. 如果组织名称太长，尝试提取主要部分
+                if [ ${#org_name} -gt 30 ]; then
+                    org_name=$(echo "$org_name" | awk '{print $1" "$2}')
+                fi
+                
+                # 3. 如果有 ISP 信息，添加到供应商信息中
+                if [ -n "$isp" ] && [ "$isp" != "null" ]; then
+                    local isp_name=$(echo "$isp" | sed -E 's/\b(AS[0-9]+)\b//g' | xargs)
+                    if [ "$org_name" != "$isp_name" ]; then
+                        provider="${org_name:-$isp_name}"
+                    else
+                        provider="$org_name"
+                    fi
+                else
+                    provider="$org_name"
+                fi
+                
+                # 4. 添加 ASN 编号
+                provider="$provider (AS${asn_num})"
+                ;;
+        esac
+        
+        # 尝试识别具体机房
+        case "$provider" in
+            "AWS")
+                local aws_region=$(curl -s --connect-timeout 2 "http://${ip}:8899/health" | jq -r '.region' 2>/dev/null)
+                if [ -n "$aws_region" ] && [ -n "${DATACENTER_INFO[$aws_region]}" ]; then
+                    datacenter_location="${DATACENTER_INFO[$aws_region]}"
+                else
+                    for region in "${!DATACENTER_INFO[@]}"; do
+                        if [[ $region == "ap-"* ]] && [[ $location == *"${region#ap-}"* ]]; then
+                            datacenter_location="${DATACENTER_INFO[$region]}"
+                            break
+                        fi
+                    done
+                fi
+                ;;
+            "GCP")
+                local gcp_zone=$(curl -s --connect-timeout 2 "http://metadata.google.internal/computeMetadata/v1/instance/zone" -H "Metadata-Flavor: Google" 2>/dev/null)
+                if [ -n "$gcp_zone" ] && [ -n "${DATACENTER_INFO[$gcp_zone]}" ]; then
+                    datacenter_location="${DATACENTER_INFO[$gcp_zone]}"
+                else
+                    for region in "${!DATACENTER_INFO[@]}"; do
+                        if [[ $region == "asia-"* ]] && [[ $location == *"${region#asia-}"* ]]; then
+                            datacenter_location="${DATACENTER_INFO[$region]}"
+                            break
+                        fi
+                    done
+                fi
+                ;;
+            "阿里云")
+                local ali_region=$(curl -s --connect-timeout 2 "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null)
+                if [ -n "$ali_region" ] && [ -n "${DATACENTER_INFO[$ali_region]}" ]; then
+                    datacenter_location="${DATACENTER_INFO[$ali_region]}"
+                else
+                    for region in "${!DATACENTER_INFO[@]}"; do
+                        if [[ $region == "cn-"* ]] && [[ $location == *"${region#cn-}"* ]]; then
+                            datacenter_location="${DATACENTER_INFO[$region]}"
+                            break
+                        fi
+                    done
+                fi
+                ;;
+            *)
+                # 构建详细的位置信息
+                local detailed_location=""
+                if [ -n "$city" ] && [ "$city" != "null" ]; then
+                    detailed_location="$city"
+                fi
+                if [ -n "$region" ] && [ "$region" != "null" ]; then
+                    detailed_location="$detailed_location, $region"
+                fi
+                if [ -n "$country" ] && [ "$country" != "null" ]; then
+                    detailed_location="$detailed_location, $country"
+                fi
+                
+                # 如果没有获取到详细位置，使用备用信息
+                if [ -z "$detailed_location" ]; then
+                    if [ -n "$location" ] && [ "$location" != "null" ]; then
+                        detailed_location="$location"
+                    elif [ -n "$asn_country" ]; then
+                        detailed_location="$asn_country"
+                    else
+                        detailed_location="Unknown Location"
+                    fi
+                fi
+                
+                datacenter_location="$detailed_location"
+                ;;
+        esac
+        
+        # 确保有位置信息
+        if [ -z "$datacenter_location" ] || [ "$datacenter_location" = "null" ]; then
+            datacenter_location="$location"
+        fi
+        
+        echo "$provider|$datacenter_location"
     else
-        echo "$location"
+        # 如果 whois 查询失败，尝试使用备用方法
+        local ip_info
+        ip_info=$(curl -s "https://ipapi.co/${ip}/json/" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            local isp=$(echo "$ip_info" | jq -r '.org // empty')
+            local city=$(echo "$ip_info" | jq -r '.city // empty')
+            local region=$(echo "$ip_info" | jq -r '.region // empty')
+            local country=$(echo "$ip_info" | jq -r '.country_name // empty')
+            
+            local location=""
+            if [ -n "$city" ] && [ "$city" != "null" ]; then
+                location="$city"
+                if [ -n "$region" ] && [ "$region" != "null" ]; then
+                    location="$location, $region"
+                fi
+                if [ -n "$country" ] && [ "$country" != "null" ]; then
+                    location="$location, $country"
+                fi
+            fi
+            
+            if [ -n "$isp" ] && [ "$isp" != "null" ]; then
+                echo "$isp|$location"
+            else
+                echo "Unknown|$location"
+            fi
+        else
+            local location=$(get_ip_location "$ip")
+            echo "Unknown|${location:-Unknown}"
+        fi
     fi
 }
 
-
-# 测试网络质量函数
+# 测试网络质量
 test_network_quality() {
     local ip="$1"
     local retries=${RETRIES:-2}
@@ -325,12 +604,6 @@ test_network_quality() {
     local total_time=0
     local success_count=0
     local ports=("${TEST_PORTS[@]:-8899 8900 8001 8000}")
-    
-    # 跳过无效的IP
-    if [[ ! "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "999.000"
-        return 0
-    fi
     
     for ((i=1; i<=retries; i++)); do
         for port in "${ports[@]}"; do
@@ -346,117 +619,125 @@ test_network_quality() {
     done
     
     if [ $success_count -gt 0 ]; then
-        echo "scale=3; $total_time / $success_count" | bc | awk '{printf "%.3f", $0}'
+        # 修改这里，使用 printf 控制精度为3位
+        local avg_latency=$(printf "%.3f" $(echo "$total_time / $success_count" | bc -l))
+        # 如果结果小于100，去掉前导0
+        avg_latency=$(echo "$avg_latency" | sed 's/^0*//')
+        echo "$avg_latency"
         return 0
     fi
     
-    echo "999.000"
+    if command -v curl >/dev/null 2>&1; then
+        local curl_start=$(date +%s%N)
+        if curl -s -o /dev/null -w '%{time_total}\n' --connect-timeout 2 "http://$ip:8899" 2>/dev/null; then
+            local curl_end=$(date +%s%N)
+            local curl_duration=$(( (curl_end - curl_start) / 1000000 ))
+            printf "%.3f" "$curl_duration"
+            return 0
+        fi
+    fi
+    
+    echo "999"
     return 0
 }
 
-# 增强的数据中心识别函数
-identify_datacenter() {
-    local ip="$1"
-    local asn_info
-    asn_info=$(timeout 5 whois -h whois.cymru.com " -v $ip" 2>/dev/null)
+# 更新进度显示
+update_progress() {
+    local current="$1"
+    local total="$2"
+    local ip="$3"
+    local latency="$4"
+    local location="$5"
+    local provider="$6"
     
-    if [ $? -eq 0 ] && [ -n "$asn_info" ]; then
-        local asn_org
-        asn_org=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $6}' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        local asn_num
-        asn_num=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $1}' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        local asn_country
-        asn_country=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $3}' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        
-        # 获取详细的地理位置信息
-        local location=$(get_ip_location "$ip")
-        local datacenter_location=""
-        local provider=""
-        
-        # 获取更详细的 IP 信息，增加错误处理
-        local ip_info
-        ip_info=$(curl -s --max-time 3 "https://ipapi.co/${ip}/json/" 2>/dev/null)
-        if [ $? -eq 0 ] && [ -n "$ip_info" ] && ! echo "$ip_info" | grep -q "error"; then
-            local isp=$(echo "$ip_info" | jq -r '.org // empty' 2>/dev/null || echo "")
-            local city=$(echo "$ip_info" | jq -r '.city // empty' 2>/dev/null || echo "")
-            local region=$(echo "$ip_info" | jq -r '.region // empty' 2>/dev/null || echo "")
-            local country=$(echo "$ip_info" | jq -r '.country_name // empty' 2>/dev/null || echo "")
-        fi
-        
-        # 根据 ASN 和组织名称识别供应商
-        case "$asn_org" in
-            *"Amazon"*|*"AWS"*|*"AMAZON"*|*"AMAZONAWS"*)
-                provider="AWS"
-                # 尝试获取 AWS 区域
-                local aws_region=$(curl -s --connect-timeout 2 "http://${ip}:8899/health" | jq -r '.region' 2>/dev/null)
-                if [ -n "$aws_region" ] && [ -n "${DATACENTER_INFO[$aws_region]}" ]; then
-                    datacenter_location="${DATACENTER_INFO[$aws_region]}"
-                fi
-                ;;
-            *"Google"*|*"GCP"*|*"GOOGLE"*|*"GOOGLECLOUD"*)
-                provider="GCP"
-                for region in "${!DATACENTER_INFO[@]}"; do
-                    if [[ $region == "asia-"* ]] && [[ $location == *"${region#asia-}"* ]]; then
-                        datacenter_location="${DATACENTER_INFO[$region]}"
-                        break
-                    fi
-                done
-                ;;
-            # ... [其他 case 分支保持不变] ...
-            *)
-                # 未知供应商的增强识别
-                local org_name
-                org_name=$(echo "$asn_org" | sed -E '
-                    s/\b(AS|LLC|INC|LTD|CORPORATION|TECHNOLOGIES|TECHNOLOGY|NETWORKS?|CLOUD|LIMITED|CO|HOSTING|DATACENTER|DATA|CENTER|TELECOM|COMMUNICATION|COMMUNICATIONS|GROUP|ENTERPRISE|ENTERPRISES|SOLUTION|SOLUTIONS)\b//gi' |
-                    sed 's/[,.]//g' |
-                    sed 's/\s\+/ /g' |
-                    xargs)
-                
-                if [ ${#org_name} -gt 30 ]; then
-                    org_name=$(echo "$org_name" | awk '{print $1" "$2}')
-                fi
-                
-                if [ -n "$isp" ] && [ "$isp" != "null" ]; then
-                    local isp_name=$(echo "$isp" | sed -E 's/\b(AS[0-9]+)\b//g' | xargs)
-                    if [ "$org_name" != "$isp_name" ]; then
-                        provider="${org_name:-$isp_name}"
-                    else
-                        provider="$org_name"
-                    fi
-                else
-                    provider="$org_name"
-                fi
-                
-                if [ -n "$asn_num" ]; then
-                    provider="$provider (AS${asn_num})"
-                fi
-                ;;
-        esac
-        
-        # 如果没有获取到数据中心位置，使用地理位置信息
-        if [ -z "$datacenter_location" ]; then
-            if [ -n "$city" ] && [ "$city" != "null" ]; then
-                datacenter_location="$city"
-                [ -n "$region" ] && [ "$region" != "null" ] && datacenter_location="$datacenter_location, $region"
-                [ -n "$country" ] && [ "$country" != "null" ] && datacenter_location="$datacenter_location, $country"
-            elif [ -n "$location" ]; then
-                datacenter_location="$location"
-            else
-                datacenter_location="Unknown Location"
-            fi
-        fi
-        
-        # 清理输出中的颜色代码和特殊字符
-        provider=$(echo "$provider" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        datacenter_location=$(echo "$datacenter_location" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        
-        echo "$provider|$datacenter_location"
+    # 保存进度
+    echo "${current}/${total}" > "${PROGRESS_FILE}"
+    
+    local progress=$((current * 100 / total))
+    local elapsed_time=$(($(date +%s) - ${START_TIME}))
+    local time_per_item=$((elapsed_time / current))
+    local remaining_items=$((total - current))
+    local eta=$((time_per_item * remaining_items))
+    
+    # 每20行显示一次进度条和表头
+    if [ $((current % 20)) -eq 1 ]; then
+# 打印总进度（在顶部）
+printf "\n["
+for ((i=0; i<40; i++)); do
+    if [ $i -lt $((progress * 40 / 100)) ]; then
+        printf "${GREEN}█${NC}"
     else
-        # 如果 whois 查询失败，返回默认值
-        echo "Unknown|Unknown Location"
+        printf "█"
+    fi
+done
+printf "] ${GREEN}%3d%%${NC} | 已测试: ${GREEN}%d${NC}/${WHITE}%d${NC} | 预计剩余: ${WHITE}%dm%ds${NC}\n\n" \
+    "$progress" "$current" "$total" \
+    $((eta / 60)) $((eta % 60))
+        # 只在每页开始时显示表头
+        printf "${WHITE}%-10s | %-15s | %-8s | %-15s | %-30s | %-15s${NC}\n" \
+            "时间" "IP地址" "延迟" "供应商" "机房位置" "进度"
+        printf "${WHITE}%s${NC}\n" "$(printf '=%.0s' {1..100})"
+    fi
+    
+    # 延迟颜色处理
+    local latency_color
+    local latency_display
+    if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        latency_int=${latency%.*}
+        if [ -z "$latency_int" ] || [ "$latency_int" -lt 100 ]; then
+            latency_color=$GREEN
+            latency_display="${latency}ms"
+        else
+            latency_color=$YELLOW
+            latency_display="${latency}ms"
+        fi
+    else
+        latency_color=$RED
+        latency_display="超时"
+    fi
+    
+    # 格式化供应商显示
+    local provider_display
+    case "$provider" in
+        *"Amazon"*|*"AWS"*)
+            provider_display="${CYAN}AWS${NC}"
+            ;;
+        *"Google"*|*"GCP"*)
+            provider_display="${YELLOW}GCP${NC}"
+            ;;
+        *"Alibaba"*|*"Aliyun"*)
+            provider_display="${RED}阿里云${NC}"
+            ;;
+        *"Microsoft"*|*"Azure"*)
+            provider_display="${BLUE}Azure${NC}"
+            ;;
+        *"Tencent"*)
+            provider_display="${GREEN}腾讯云${NC}"
+            ;;
+        *)
+            provider_display="${WHITE}${provider}${NC}"
+            ;;
+    esac
+    
+    # 打印当前测试结果（交替颜色）
+    if [ $((current % 2)) -eq 0 ]; then
+        printf "${GREEN}%s | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15s | ${WHITE}%-30s${NC} | ${GREEN}%d/%d${NC}\n" \
+            "$(date '+%H:%M:%S')" \
+            "$ip" \
+            "$latency_display" \
+            "$provider_display" \
+            "$location" \
+            "$current" "$total"
+    else
+        printf "${WHITE}%s | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15s | ${WHITE}%-30s${NC} | ${GREEN}%d/%d${NC}\n" \
+            "$(date '+%H:%M:%S')" \
+            "$ip" \
+            "$latency_display" \
+            "$provider_display" \
+            "$location" \
+            "$current" "$total"
     fi
 }
-
 
 
 # 获取验证者信息
@@ -744,17 +1025,23 @@ check_background_task() {
         # 持续监控模式
         trap 'echo -e "\n${GREEN}已退出监控模式${NC}"; return 0' INT
         
-        # 使用 tail -f 实时显示日志
-        tail -f "${BACKGROUND_LOG}" | while read -r line; do
-            if [[ $line == *"["*"]"* ]] || [[ $line == *"|"* ]] || [[ $line == "====="* ]] || [[ $line == *"INFO"* ]] || [[ $line == *"SUCCESS"* ]]; then
-                echo -e "$line"
-            fi
+        while true; do
+            clear
+            # 读取并显示最后25行（一页）内容
+            tail -f "${BACKGROUND_LOG}" | while read -r line; do
+                if [[ $line == *"["*"]"* ]] || [[ $line == *"|"* ]] || [[ $line == "====="* ]] || [[ $line == *"INFO"* ]] || [[ $line == *"SUCCESS"* ]]; then
+                    echo -e "$line"
+                fi
+            done
             
-            # 检查任务是否完成
-            if [[ $line == *"分析完成"* ]]; then
-                echo -e "\n${GREEN}任务已完成${NC}"
-                kill -TERM $$ # 结束 tail 进程
-                break
+            if [ ! -f "${TEMP_DIR}/background.pid" ] || ! kill -0 $(cat "${TEMP_DIR}/background.pid" 2>/dev/null) 2>/dev/null; then
+                if grep -q "分析完成" "${BACKGROUND_LOG}"; then
+                    echo -e "\n${GREEN}任务已完成${NC}"
+                    break
+                else
+                    echo -e "\n${RED}任务异常退出${NC}"
+                    break
+                fi
             fi
         done
         
@@ -780,44 +1067,49 @@ show_background_menu() {
         read -r choice
 
         case $choice in
-            1)  
-                if [ -f "${BACKGROUND_LOG}" ]; then
+            1)  if [ -f "${BACKGROUND_LOG}" ]; then
                     log "ERROR" "已有后台任务在运行"
                 else
-                    # 确保目录和文件权限正确
-                    mkdir -p "$(dirname "${BACKGROUND_LOG}")" "${TEMP_DIR}"
-                    touch "${BACKGROUND_LOG}"
-                    chmod 777 "${BACKGROUND_LOG}" "${TEMP_DIR}"
-                    
-                    # 获取脚本的绝对路径
-                    SCRIPT_PATH=$(readlink -f "$0")
-                    
-                    # 使用 setsid 启动后台进程
-                    (setsid bash "${SCRIPT_PATH}" background > "${BACKGROUND_LOG}" 2>&1 &)
-                    
-                    # 获取PID并等待确认进程启动
-                    sleep 2
-                    PID=$(pgrep -f "bash.*background")
-                    
-                    if [ -n "$PID" ]; then
-                        echo "$PID" > "${TEMP_DIR}/background.pid"
-                        chmod 666 "${TEMP_DIR}/background.pid"
-                        log "SUCCESS" "后台任务已启动，进程ID: $PID"
-                        sleep 1
-                        if [ -s "${BACKGROUND_LOG}" ]; then
-                            log "INFO" "日志文件已创建: ${BACKGROUND_LOG}"
-                        fi
+                    # 修改这里的后台任务启动方式
+                    bash "$0" background > "${BACKGROUND_LOG}" 2>&1 &
+                    local pid=$!
+                    echo $pid > "${TEMP_DIR}/background.pid"
+                    sleep 1  # 等待一秒确保进程启动
+                    if kill -0 $pid 2>/dev/null; then
+                        log "SUCCESS" "后台任务已启动，进程ID: $pid"
                     else
                         log "ERROR" "后台任务启动失败"
                         rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
                     fi
                 fi
+                read -rp "按回车键继续..."
                 ;;
-            # ... 其他 case 分支保持不变 ...
+            2)  check_background_task
+                read -rp "按回车键继续..."
+                ;;
+            3)  if [ -f "${TEMP_DIR}/background.pid" ]; then
+                    local pid=$(cat "${TEMP_DIR}/background.pid")
+                    if kill -0 "$pid" 2>/dev/null; then
+                        kill "$pid"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                        log "SUCCESS" "后台任务已停止"
+                    else
+                        log "WARN" "后台任务已不存在"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                    fi
+                else
+                    log "WARN" "没有运行中的后台任务"
+                fi
+                read -rp "按回车键继续..."
+                ;;
+            0)  break ;;
+            *)  log "ERROR" "无效选择"
+                sleep 1
+                ;;
         esac
-        read -rp "按回车键继续..."
     done
 }
+
 
 # 测试单个IP
 test_single_ip() {
