@@ -202,29 +202,27 @@ get_ip_info() {
     local info=""
     
     while [ $retry_count -lt $max_retries ]; do
-        # 尝试 ip-api.com（更可靠的选择）
-        info=$(curl -s --max-time 3 "http://ip-api.com/json/${ip}")
+        # 尝试 ip-api.com
+        info=$(curl -s --max-time 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as")
         if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
-            # 确保返回格式一致的JSON
-            echo "{
-                \"ip\": \"$ip\",
-                \"org\": $(echo "$info" | jq -r '.isp // .org // "Unknown"'),
-                \"city\": $(echo "$info" | jq -r '.city // "Unknown"'),
-                \"country\": $(echo "$info" | jq -r '.country // "Unknown"')
-            }"
+            # 清理和转义JSON数据
+            local org=$(echo "$info" | jq -r '.isp // .org // "Unknown"' | sed 's/["\]/\\&/g')
+            local city=$(echo "$info" | jq -r '.city // "Unknown"' | sed 's/["\]/\\&/g')
+            local country=$(echo "$info" | jq -r '.country // "Unknown"' | sed 's/["\]/\\&/g')
+            
+            echo "{\"ip\":\"$ip\",\"org\":\"$org\",\"city\":\"$city\",\"country\":\"$country\"}"
             return 0
         fi
         
-        # 如果第一个API失败，尝试 ipinfo.io
+        # 备用：ipinfo.io
         info=$(curl -s --max-time 3 "https://ipinfo.io/${ip}/json")
         if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.bogon // empty')" != "true" ]; then
-            # 标准化输出格式
-            echo "{
-                \"ip\": \"$ip\",
-                \"org\": $(echo "$info" | jq -r '.org // "Unknown"'),
-                \"city\": $(echo "$info" | jq -r '.city // "Unknown"'),
-                \"country\": $(echo "$info" | jq -r '.country // "Unknown"')
-            }"
+            # 清理和转义JSON数据
+            local org=$(echo "$info" | jq -r '.org // "Unknown"' | sed 's/["\]/\\&/g')
+            local city=$(echo "$info" | jq -r '.city // "Unknown"' | sed 's/["\]/\\&/g')
+            local country=$(echo "$info" | jq -r '.country // "Unknown"' | sed 's/["\]/\\&/g')
+            
+            echo "{\"ip\":\"$ip\",\"org\":\"$org\",\"city\":\"$city\",\"country\":\"$country\"}"
             return 0
         fi
         
@@ -232,13 +230,8 @@ get_ip_info() {
         [ $retry_count -lt $max_retries ] && sleep 1
     done
     
-    # 如果所有API都失败，返回标准格式的默认值
-    echo "{
-        \"ip\": \"$ip\",
-        \"org\": \"Unknown\",
-        \"city\": \"Unknown\",
-        \"country\": \"Unknown\"
-    }"
+    # 默认返回
+    echo "{\"ip\":\"$ip\",\"org\":\"Unknown\",\"city\":\"Unknown\",\"country\":\"Unknown\"}"
     return 0
 }
 
@@ -762,24 +755,25 @@ show_background_menu() {
         read -r choice
 
         case $choice in
-            1)  if [ -f "${BACKGROUND_LOG}" ]; then
-                    log "ERROR" "已有后台任务在运行"
-                else
-                    log "INFO" "启动后台分析任务..."
-                    nohup bash "$0" background > "${BACKGROUND_LOG}" 2>&1 &
-                    local pid=$!
-                    echo $pid > "${TEMP_DIR}/background.pid"
-                    sleep 2
-                    
-                    if kill -0 $pid 2>/dev/null; then
-                        log "SUCCESS" "后台任务已启动，进程ID: $pid"
-                    else
-                        log "ERROR" "后台任务启动失败"
-                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
-                    fi
-                fi
-                read -rp "按回车键继续..."
-                ;;
+1)  if [ -f "${BACKGROUND_LOG}" ]; then
+        log "ERROR" "已有后台任务在运行"
+    else
+        log "INFO" "启动后台分析任务..."
+        # 使用完整路径并添加错误重定向
+        nohup "$(readlink -f "$0")" background > "${BACKGROUND_LOG}" 2>&1 &
+        local pid=$!
+        echo $pid > "${TEMP_DIR}/background.pid"
+        sleep 2
+        
+        if kill -0 $pid 2>/dev/null; then
+            log "SUCCESS" "后台任务已启动，进程ID: $pid"
+        else
+            log "ERROR" "后台任务启动失败"
+            rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+        fi
+    fi
+    read -rp "按回车键继续..."
+    ;;
                 
             2)  if [ -f "${BACKGROUND_LOG}" ]; then
                     echo -e "\n${GREEN}正在监控后台任务 (按 Ctrl+C 退出监控)${NC}"
