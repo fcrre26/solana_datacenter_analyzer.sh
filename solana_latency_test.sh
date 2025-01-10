@@ -513,6 +513,90 @@ analyze_validators() {
     fi
 }
 
+# 生成报告
+generate_report() {
+    log "INFO" "正在生成报告..."
+    
+    local total_nodes=$(wc -l < "${RESULTS_FILE}")
+    local avg_latency=$(awk -F'|' '$4!=999 { sum+=$4; count++ } END { if(count>0) printf "%.3f", sum/count }' "${RESULTS_FILE}")
+    local min_latency=$(sort -t'|' -k4 -n "${RESULTS_FILE}" | head -1 | cut -d'|' -f4)
+    local max_latency=$(sort -t'|' -k4 -n "${RESULTS_FILE}" | grep -v "999" | tail -1 | cut -d'|' -f4)
+    
+    {
+        echo "# Solana 验证者节点延迟分析报告"
+        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "总节点数: ${total_nodes}"
+        echo "平均延迟: ${avg_latency}ms"
+        echo "最低延迟: ${min_latency}ms"
+        echo "最高延迟: ${max_latency}ms"
+        echo
+        
+        echo "## 延迟统计 (Top 20 最佳节点)"
+        echo "| IP地址 | 延迟(ms) | 供应商 | 机房位置 | 区域代码 |"
+        echo "|--------|-----------|---------|----------|-----------|"
+        
+        sort -t'|' -k4 -n "${RESULTS_FILE}" | head -20 | while IFS='|' read -r ip provider location latency region; do
+            if [ "$latency" != "999" ]; then
+                printf "| %s | %.3f | %s | %s | %s |\n" "$ip" "$latency" "$provider" "$location" "$region"
+            fi
+        done
+        
+        echo
+        echo "## 供应商分布"
+        echo "| 供应商 | 节点数量 | 平均延迟(ms) |"
+        echo "|---------|-----------|--------------|"
+        
+        awk -F'|' '$4!=999 {
+            count[$2]++
+            latency_sum[$2]+=$4
+        }
+        END {
+            for (provider in count) {
+                printf "| %s | %d | %.3f |\n", 
+                    provider, 
+                    count[provider], 
+                    latency_sum[provider]/count[provider]
+            }
+        }' "${RESULTS_FILE}" | sort -t'|' -k3 -n
+        
+        echo
+        echo "## 机房分布"
+        echo "| 机房位置 | 节点数量 | 平均延迟(ms) | 区域代码 |"
+        echo "|----------|-----------|--------------|-----------|"
+        
+        awk -F'|' '$4!=999 {
+            count[$3]++
+            latency_sum[$3]+=$4
+            region[$3]=$5
+        }
+        END {
+            for (loc in count) {
+                printf "| %s | %d | %.3f | %s |\n", 
+                    loc, 
+                    count[loc], 
+                    latency_sum[loc]/count[loc],
+                    region[loc]
+            }
+        }' "${RESULTS_FILE}" | sort -t'|' -k3 -n
+        
+        echo
+        echo "## 购买建议"
+        echo "1. 最佳选择（延迟 < 50ms）："
+        awk -F'|' '$4!=999 && $4<50 {
+            printf "   - %s (%s, 延迟: %.2fms)\n", $2, $3, $4
+        }' "${RESULTS_FILE}" | sort -u
+        
+        echo
+        echo "2. 次佳选择（延迟 50-100ms）："
+        awk -F'|' '$4!=999 && $4>=50 && $4<100 {
+            printf "   - %s (%s, 延迟: %.2fms)\n", $2, $3, $4
+        }' "${RESULTS_FILE}" | sort -u
+        
+    } > "${LATEST_REPORT}"
+    
+    log "SUCCESS" "报告已生成: ${LATEST_REPORT}"
+}
+
 # 并发分析验证者节点
 analyze_validators_parallel() {
     local background="${1:-false}"
