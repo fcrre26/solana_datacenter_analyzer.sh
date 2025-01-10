@@ -970,52 +970,17 @@ show_menu() {
     echo
     echo -ne "${GREEN}请输入您的选择 [0-6]: ${NC}"
 }
+# 启动后台分析任务
+start_background_analysis() {
+    if [ -f "${TEMP_DIR}/background.pid" ]; then
+        if kill -0 "$(cat "${TEMP_DIR}/background.pid")" 2>/dev/null; then
+            log "ERROR" "已有后台任务在运行"
+            return 1
+        else
+            rm -f "${TEMP_DIR}/background.pid"
+        fi
+    fi
 
-# 后台任务管理菜单
-show_background_menu() {
-    while true; do
-        clear
-        echo -e "${GREEN}后台任务管理${NC}"
-        echo "==================="
-        echo -e "${GREEN}1. 启动后台并发分析${NC}"
-        echo -e "${GREEN}2. 实时监控后台任务${NC}"
-        echo -e "${GREEN}3. 停止后台任务${NC}"
-        echo -e "${GREEN}4. 查看后台任务状态${NC}"
-        echo -e "${GREEN}5. 查看最新报告${NC}"
-        echo -e "${RED}0. 返回主菜单${NC}"
-        echo
-        echo -ne "${GREEN}请选择 [0-5]: ${NC}"
-        read -r choice
-
-        case $choice in
-            1)  
-                if [ -f "${TEMP_DIR}/background.pid" ]; then
-                    if kill -0 "$(cat "${TEMP_DIR}/background.pid")" 2>/dev/null; then
-                        log "ERROR" "已有后台任务在运行"
-                    else
-                        rm -f "${TEMP_DIR}/background.pid"
-                        start_background_task
-                    fi
-                else
-                    start_background_task
-                fi
-                ;;
-            2)  monitor_background_task ;;
-            3)  stop_background_task ;;
-            4)  show_background_status ;;
-            5)  show_latest_report ;;
-            0)  break ;;
-            *)  log "ERROR" "无效选择"
-                sleep 1
-                ;;
-        esac
-        
-        [ "$choice" != "2" ] && read -rp "按回车键继续..."
-    done
-}
-
-# 启动后台任务
-start_background_task() {
     log "INFO" "启动后台分析任务..."
     
     # 获取脚本的完整路径
@@ -1040,17 +1005,19 @@ start_background_task() {
         chmod 644 "${TEMP_DIR}/background.pid"
         log "SUCCESS" "后台任务已启动，进程ID: $pid"
         log "INFO" "可以使用选项 2 监控任务进度"
+        return 0
     else
         log "ERROR" "后台任务启动失败"
         rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+        return 1
     fi
 }
 
-# 监控后台任务
-monitor_background_task() {
+# 监控后台任务进度
+monitor_background_progress() {
     if [ ! -f "${BACKGROUND_LOG}" ]; then
         log "WARN" "没有运行中的后台任务"
-        return
+        return 1
     fi
     
     clear
@@ -1058,7 +1025,7 @@ monitor_background_task() {
     echo -e "${GREEN}===================${NC}\n"
     
     # 使用 trap 捕获 Ctrl+C
-    trap 'echo -e "\n${GREEN}退出监控${NC}"; return' INT
+    trap 'echo -e "\n${GREEN}退出监控${NC}"; return 0' INT
     
     tail -f "${BACKGROUND_LOG}"
     
@@ -1070,7 +1037,7 @@ monitor_background_task() {
 stop_background_task() {
     if [ ! -f "${TEMP_DIR}/background.pid" ]; then
         log "WARN" "没有运行中的后台任务"
-        return
+        return 1
     fi
     
     local pid=$(cat "${TEMP_DIR}/background.pid")
@@ -1085,17 +1052,19 @@ stop_background_task() {
         
         rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
         log "SUCCESS" "后台任务已停止"
+        return 0
     else
         log "WARN" "后台任务已不存在"
         rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+        return 1
     fi
 }
 
-# 显示后台任务状态
-show_background_status() {
+# 查看后台任务状态
+check_background_status() {
     if [ ! -f "${TEMP_DIR}/background.pid" ]; then
         log "INFO" "没有运行中的后台任务"
-        return
+        return 1
     fi
     
     local pid=$(cat "${TEMP_DIR}/background.pid")
@@ -1118,22 +1087,57 @@ show_background_status() {
             echo -e "\n最新日志:"
             tail -n 5 "${BACKGROUND_LOG}"
         fi
+        return 0
     else
         log "WARN" "后台任务已结束"
         rm -f "${TEMP_DIR}/background.pid"
+        return 1
     fi
 }
 
-# 显示最新报告
-show_latest_report() {
+# 查看最新分析报告
+view_latest_report() {
     if [ -f "${LATEST_REPORT}" ]; then
         clear
         cat "${LATEST_REPORT}"
+        return 0
     else
         log "ERROR" "未找到分析报告"
+        return 1
     fi
 }
 
+# 后台任务管理菜单
+show_background_menu() {
+    while true; do
+        clear
+        echo -e "${GREEN}后台任务管理${NC}"
+        echo "==================="
+        echo -e "${GREEN}1. 启动后台并发分析${NC}"
+        echo -e "${GREEN}2. 实时监控后台任务${NC}"
+        echo -e "${GREEN}3. 停止后台任务${NC}"
+        echo -e "${GREEN}4. 查看后台任务状态${NC}"
+        echo -e "${GREEN}5. 查看最新报告${NC}"
+        echo -e "${RED}0. 返回主菜单${NC}"
+        echo
+        echo -ne "${GREEN}请选择 [0-5]: ${NC}"
+        read -r choice
+
+        case $choice in
+            1)  start_background_analysis ;;
+            2)  monitor_background_progress ;;
+            3)  stop_background_task ;;
+            4)  check_background_status ;;
+            5)  view_latest_report ;;
+            0)  break ;;
+            *)  log "ERROR" "无效选择"
+                sleep 1
+                ;;
+        esac
+        
+        [ "$choice" != "2" ] && read -rp "按回车键继续..."
+    done
+}
 
 # 配置菜单
 show_config_menu() {
