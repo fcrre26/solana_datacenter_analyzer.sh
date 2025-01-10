@@ -922,7 +922,6 @@ analyze_validators_parallel() {
     fi
 }
 
-# 生成分析报告
 generate_report() {
     log "INFO" "正在生成报告..."
     
@@ -976,7 +975,7 @@ generate_report() {
             }
         }' "${RESULTS_FILE}" | sort -t'|' -k3 -n
 
-                echo
+        echo
         echo -e "${GREEN}## 机房分布${NC}"
         echo "| 机房位置              | 节点数量    | 平均延迟(ms)    |"
         echo "|---------------------|------------|-----------------|"
