@@ -215,6 +215,8 @@ get_ip_info() {
     local ip="$1"
     local max_retries=3
     local retry_count=0
+    local provider
+    local location
     
     # 清理字符串函数
     clean_string() {
@@ -340,12 +342,10 @@ get_ip_info() {
     }
     
     # 获取供应商信息
-    local provider
     provider=$(get_provider_info "$ip")
     provider=$(clean_string "${provider:-Unknown}")
     
     # 获取位置信息
-    local location
     location=$(get_location_info "$ip")
     location=$(clean_string "${location:-Unknown}")
     
@@ -355,24 +355,6 @@ get_ip_info() {
           "${provider}" \
           "${location}"
 }
-    
-    # 获取供应商信息
-    local provider
-    provider=$(get_provider_info "$ip")
-    provider=$(clean_string "${provider:-Unknown}")
-    
-    # 获取位置信息
-    local location
-    location=$(get_location_info "$ip")
-    location=$(clean_string "${location:-Unknown}")
-    
-    # 返回结果
-    printf '{"ip":"%s","org":"%s","location":"%s"}' \
-          "$ip" \
-          "${provider}" \
-          "${location}"
-}
-
 # 测试网络质量
 test_network_quality() {
     local ip="$1"
