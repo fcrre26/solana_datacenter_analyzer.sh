@@ -513,6 +513,115 @@ analyze_validators() {
     fi
 }
 
+# 并发分析验证者节点
+analyze_validators_parallel() {
+    local background="${1:-false}"
+    BACKGROUND_MODE="$background"
+    local max_jobs=${MAX_CONCURRENT_JOBS:-10}
+    
+    log "INFO" "开始并发分析验证者节点分布"
+    
+    # 检查系统资源
+    local available_memory=$(free -m | awk '/^Mem:/{print $2}')
+    local recommended_jobs=$((available_memory / 200))
+    
+    if [ $max_jobs -gt $recommended_jobs ]; then
+        log "WARN" "当前内存可能不足以支持 $max_jobs 个并发任务"
+        log "INFO" "建议将并发数调整为 $recommended_jobs"
+        if [ "${BACKGROUND_MODE}" = "false" ]; then
+            read -rp "是否继续？[y/N] " confirm
+            if [[ ! $confirm =~ ^[Yy]$ ]]; then
+                return 1
+            fi
+        fi
+    fi
+    
+    # 获取验证者信息
+    local validator_ips
+    validator_ips=$(get_validators) || {
+        log "ERROR" "获取验证者信息失败"
+        return 1
+    }
+    
+    : > "${RESULTS_FILE}"
+    echo "$validator_ips" > "${TEMP_DIR}/tmp_ips.txt"
+    
+    local total=$(wc -l < "${TEMP_DIR}/tmp_ips.txt")
+    local current=0
+    
+    START_TIME=$(date +%s)
+    
+    log "INFO" "找到 ${total} 个验证者节点"
+    echo "----------------------------------------"
+    
+    # 创建临时结果目录
+    local tmp_result_dir="${TEMP_DIR}/results"
+    mkdir -p "$tmp_result_dir"
+    rm -f "${tmp_result_dir}"/*
+    
+    # 创建信号量
+    local sem_file="${TEMP_DIR}/semaphore"
+    mkfifo "$sem_file"
+    exec 3<>"$sem_file"
+    rm "$sem_file"
+    
+    # 初始化信号量
+    for ((i=1; i<=max_jobs; i++)); do
+        echo $i >&3
+    done
+    
+    # 并发测试
+    while read -r ip; do
+        read -u 3 token
+        ((current++))
+        
+        {
+            local result_file="${tmp_result_dir}/${current}.result"
+            local latency=$(test_network_quality "$ip")
+            local ip_info=$(get_ip_info "$ip")
+            local provider_info=$(identify_provider "$(echo "$ip_info" | jq -r '.org // .isp // "Unknown"')" "$(echo "$ip_info" | jq -r '.city // "Unknown"'), $(echo "$ip_info" | jq -r '.country_name // .country // "Unknown"')")
+            
+            local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
+            local region_code=$(echo "$provider_info" | cut -d'|' -f2)
+            local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
+            
+            echo "$latency|$cloud_provider|$datacenter|$region_code" > "$result_file"
+            
+            # 更新进度
+            {
+                flock -x 200
+                update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
+                echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "${RESULTS_FILE}"
+            } 200>>"${TEMP_DIR}/progress.lock"
+            
+            # 释放信号量
+            echo "$token" >&3
+            
+        } &
+        
+    done < "${TEMP_DIR}/tmp_ips.txt"
+    
+    # 等待所有任务完成
+    wait
+    
+    # 关闭信号量
+    exec 3>&-
+    
+    # 清理临时文件
+    rm -rf "$tmp_result_dir"
+    rm -f "${TEMP_DIR}/progress.lock"
+    
+    echo "----------------------------------------"
+    generate_report
+    
+    if [ "$background" = "true" ]; then
+        log "SUCCESS" "后台并发分析完成！报告已生成: ${LATEST_REPORT}"
+    else
+        log "SUCCESS" "并发分析完成！报告已生成: ${LATEST_REPORT}"
+    fi
+}
+
+
 # 显示菜单函数
 show_menu() {
     clear
