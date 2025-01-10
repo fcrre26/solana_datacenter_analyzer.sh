@@ -618,18 +618,21 @@ test_network_quality() {
         done
     done
     
-if [ $success_count -gt 0 ]; then
-    local avg_latency=$(awk "BEGIN {printf \"%.3f\", $total_time / $success_count}")
-    echo "$avg_latency"
-    return 0
-fi
+    if [ $success_count -gt 0 ]; then
+        # 修改这里，使用 printf 控制精度为3位
+        local avg_latency=$(printf "%.3f" $(echo "$total_time / $success_count" | bc -l))
+        # 如果结果小于100，去掉前导0
+        avg_latency=$(echo "$avg_latency" | sed 's/^0*//')
+        echo "$avg_latency"
+        return 0
+    fi
     
     if command -v curl >/dev/null 2>&1; then
         local curl_start=$(date +%s%N)
         if curl -s -o /dev/null -w '%{time_total}\n' --connect-timeout 2 "http://$ip:8899" 2>/dev/null; then
             local curl_end=$(date +%s%N)
             local curl_duration=$(( (curl_end - curl_start) / 1000000 ))
-            echo "$curl_duration"
+            printf "%.3f" "$curl_duration"
             return 0
         fi
     fi
