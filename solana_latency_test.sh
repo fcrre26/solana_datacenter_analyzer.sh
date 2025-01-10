@@ -401,11 +401,11 @@ test_network_quality() {
         done
     done
     
-    if [ $success_count -gt 0 ]; then
-        local avg_latency=$((total_time / success_count))
-        echo "$avg_latency"
-        return 0
-    fi
+if [ $success_count -gt 0 ]; then
+    local avg_latency=$(awk "BEGIN {printf \"%.3f\", $total_time / $success_count}")
+    echo "$avg_latency"
+    return 0
+fi
     
     if command -v curl >/dev/null 2>&1; then
         local curl_start=$(date +%s%N)
@@ -442,9 +442,14 @@ update_progress() {
     # 每20行显示一次进度条和表头
     if [ $((current % 20)) -eq 1 ]; then
 # 打印总进度（在顶部）
-printf "\n[" 
-printf "${GREEN}▇%.0s${NC}" $(seq 1 $((progress * 40 / 100)))
-printf "▇%.0s" $(seq 1 $((40 - progress * 40 / 100)))
+printf "\n["
+for ((i=0; i<40; i++)); do
+    if [ $i -lt $((progress * 40 / 100)) ]; then
+        printf "${GREEN}█${NC}"
+    else
+        printf "█"
+    fi
+done
 printf "] ${GREEN}%3d%%${NC} | 已测试: ${GREEN}%d${NC}/${WHITE}%d${NC} | 预计剩余: ${WHITE}%dm%ds${NC}\n\n" \
     "$progress" "$current" "$total" \
     $((eta / 60)) $((eta % 60))
