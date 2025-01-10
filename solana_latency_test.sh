@@ -441,14 +441,13 @@ update_progress() {
     
     # 每20行显示一次进度条和表头
     if [ $((current % 20)) -eq 1 ]; then
-        # 打印总进度（在顶部）
-        printf "\n[" 
-        printf "${GREEN}█%.0s${NC}" $(seq 1 $((progress * 40 / 100)))
-        printf "${WHITE}░%.0s${NC}" $(seq 1 $((40 - progress * 40 / 100)))
-        printf "] ${GREEN}%3d%%${NC} | 已测试: ${GREEN}%d${NC}/${WHITE}%d${NC} | 预计剩余: ${WHITE}%dm%ds${NC}\n\n" \
-            "$progress" "$current" "$total" \
-            $((eta / 60)) $((eta % 60))
-        
+# 打印总进度（在顶部）
+printf "\n[" 
+printf "${GREEN}▇%.0s${NC}" $(seq 1 $((progress * 40 / 100)))
+printf "▇%.0s" $(seq 1 $((40 - progress * 40 / 100)))
+printf "] ${GREEN}%3d%%${NC} | 已测试: ${GREEN}%d${NC}/${WHITE}%d${NC} | 预计剩余: ${WHITE}%dm%ds${NC}\n\n" \
+    "$progress" "$current" "$total" \
+    $((eta / 60)) $((eta % 60))
         # 只在每页开始时显示表头
         printf "${WHITE}%-10s | %-15s | %-8s | %-15s | %-30s | %-15s${NC}\n" \
             "时间" "IP地址" "延迟" "供应商" "机房位置" "进度"
