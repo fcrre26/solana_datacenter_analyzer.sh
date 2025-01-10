@@ -792,6 +792,42 @@ show_menu() {
     echo -ne "${GREEN}请输入您的选择 [0-6]: ${NC}"
 }
 
+# 检查后台任务状态
+check_background_task() {
+    if [ -f "${BACKGROUND_LOG}" ]; then
+        echo -e "\n${GREEN}正在监控后台任务 (按 Ctrl+C 退出监控)${NC}"
+        echo -e "${GREEN}===================${NC}"
+        
+        # 持续监控模式
+        trap 'echo -e "\n${GREEN}已退出监控模式${NC}"; return 0' INT
+        
+        while true; do
+            clear
+            # 读取并显示最后25行（一页）内容
+            tail -f "${BACKGROUND_LOG}" | while read -r line; do
+                if [[ $line == *"["*"]"* ]] || [[ $line == *"|"* ]] || [[ $line == "====="* ]] || [[ $line == *"INFO"* ]] || [[ $line == *"SUCCESS"* ]]; then
+                    echo -e "$line"
+                fi
+            done
+            
+            if [ ! -f "${TEMP_DIR}/background.pid" ] || ! kill -0 $(cat "${TEMP_DIR}/background.pid" 2>/dev/null) 2>/dev/null; then
+                if grep -q "分析完成" "${BACKGROUND_LOG}"; then
+                    echo -e "\n${GREEN}任务已完成${NC}"
+                    break
+                else
+                    echo -e "\n${RED}任务异常退出${NC}"
+                    break
+                fi
+            fi
+        done
+        
+        trap - INT
+        echo -e "${GREEN}===================${NC}"
+    else
+        echo -e "\n${YELLOW}没有运行中的后台任务${NC}"
+    fi
+}
+
 # 后台任务管理菜单
 show_background_menu() {
     while true; do
@@ -799,7 +835,7 @@ show_background_menu() {
         echo -e "${GREEN}后台任务管理${NC}"
         echo "==================="
         echo -e "1. 启动后台并发分析"
-        echo -e "2. 查看后台任务状态"
+        echo -e "2. 实时监控后台任务"
         echo -e "3. 停止后台任务"
         echo -e "0. 返回主菜单"
         echo
@@ -841,6 +877,7 @@ show_background_menu() {
         esac
     done
 }
+
 
 # 测试单个IP
 test_single_ip() {
