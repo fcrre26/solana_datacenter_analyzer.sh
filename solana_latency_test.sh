@@ -201,28 +201,53 @@ get_ip_info() {
     local retry_count=0
     local info=""
     
+    # 清理字符串函数
+    clean_string() {
+        echo "$1" | tr -dc '[:print:]' | sed 's/["\]/\\&/g' | sed 's/[^a-zA-Z0-9.,_ -]//g'
+    }
+    
     while [ $retry_count -lt $max_retries ]; do
         # 尝试 ip-api.com
         info=$(curl -s --max-time 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as")
         if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
-            # 清理和转义JSON数据
-            local org=$(echo "$info" | jq -r '.isp // .org // "Unknown"' | sed 's/["\]/\\&/g')
-            local city=$(echo "$info" | jq -r '.city // "Unknown"' | sed 's/["\]/\\&/g')
-            local country=$(echo "$info" | jq -r '.country // "Unknown"' | sed 's/["\]/\\&/g')
+            # 清理和转义数据
+            local org=$(echo "$info" | jq -r '.isp // .org // "Unknown"' | clean_string)
+            local city=$(echo "$info" | jq -r '.city // "Unknown"' | clean_string)
+            local country=$(echo "$info" | jq -r '.country // "Unknown"' | clean_string)
             
-            echo "{\"ip\":\"$ip\",\"org\":\"$org\",\"city\":\"$city\",\"country\":\"$country\"}"
+            # 构建地理位置字符串
+            local location="${city}, ${country}"
+            [ "$city" = "Unknown" ] && [ "$country" != "Unknown" ] && location="$country"
+            [ "$city" != "Unknown" ] && [ "$country" = "Unknown" ] && location="$city"
+            [ "$city" = "Unknown" ] && [ "$country" = "Unknown" ] && location="Unknown"
+            
+            # 返回清理过的JSON
+            printf '{"ip":"%s","org":"%s","location":"%s"}' \
+                  "$ip" \
+                  "${org:-Unknown}" \
+                  "${location:-Unknown}"
             return 0
         fi
         
         # 备用：ipinfo.io
         info=$(curl -s --max-time 3 "https://ipinfo.io/${ip}/json")
         if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.bogon // empty')" != "true" ]; then
-            # 清理和转义JSON数据
-            local org=$(echo "$info" | jq -r '.org // "Unknown"' | sed 's/["\]/\\&/g')
-            local city=$(echo "$info" | jq -r '.city // "Unknown"' | sed 's/["\]/\\&/g')
-            local country=$(echo "$info" | jq -r '.country // "Unknown"' | sed 's/["\]/\\&/g')
+            # 清理和转义数据
+            local org=$(echo "$info" | jq -r '.org // "Unknown"' | clean_string)
+            local city=$(echo "$info" | jq -r '.city // "Unknown"' | clean_string)
+            local country=$(echo "$info" | jq -r '.country // "Unknown"' | clean_string)
             
-            echo "{\"ip\":\"$ip\",\"org\":\"$org\",\"city\":\"$city\",\"country\":\"$country\"}"
+            # 构建地理位置字符串
+            local location="${city}, ${country}"
+            [ "$city" = "Unknown" ] && [ "$country" != "Unknown" ] && location="$country"
+            [ "$city" != "Unknown" ] && [ "$country" = "Unknown" ] && location="$city"
+            [ "$city" = "Unknown" ] && [ "$country" = "Unknown" ] && location="Unknown"
+            
+            # 返回清理过的JSON
+            printf '{"ip":"%s","org":"%s","location":"%s"}' \
+                  "$ip" \
+                  "${org:-Unknown}" \
+                  "${location:-Unknown}"
             return 0
         fi
         
@@ -231,7 +256,7 @@ get_ip_info() {
     done
     
     # 默认返回
-    echo "{\"ip\":\"$ip\",\"org\":\"Unknown\",\"city\":\"Unknown\",\"country\":\"Unknown\"}"
+    printf '{"ip":"%s","org":"Unknown","location":"Unknown"}' "$ip"
     return 0
 }
 
