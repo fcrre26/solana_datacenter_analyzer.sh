@@ -6,14 +6,6 @@ set -euo pipefail
 # 处理命令行参数
 BACKGROUND_TASK="${1:-}"
 
-if [ "${BACKGROUND_TASK}" = "--background-task" ]; then
-    # 后台任务模式
-    analyze_validators
-    generate_report "${LATEST_REPORT}"
-    backup_data
-    exit 0
-fi
-
 # 颜色定义
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -37,19 +29,19 @@ BACKGROUND_LOG="${REPORT_DIR}/background.log"
 LOCK_FILE="/tmp/solana_dc_finder.lock"
 BACKUP_DIR="${REPORT_DIR}/backups"
 BACKUP_FILE="${BACKUP_DIR}/latest_analysis.bak"
-VERSION="v1.2.5"
+VERSION="v1.2.6"
 
 # 创建必要的目录
 mkdir -p "${TEMP_DIR}" "${REPORT_DIR}" "${BACKUP_DIR}"
 
 # 格式化数字
 format_number() {
-    printf "%'d" $1
+    printf "%'d" "$1"
 }
 
 # 日志函数
 log() {
-    local level=$1
+    local level="$1"
     shift
     local message="$*"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
@@ -156,23 +148,19 @@ check_background_task() {
 
 # 进度条显示
 show_progress() {
-    local current=$1
-    local total=$2
+    local current="$1"
+    local total="$2"
     local width=50
     local percentage=$((current * 100 / total))
     local completed=$((width * current / total))
     
-    # 清除当前行
-    printf "\r"
-    # 显示百分比和进度条
-    printf "进度: [%-${width}s] %3d%%" "$(printf '#%.0s' $(seq 1 $completed))" "$percentage"
-    # 强制输出
+    printf "\r进度: [%-${width}s] %3d%%" "$(printf '#%.0s' $(seq 1 $completed))" "$percentage"
     printf "\e[0K"
 }
 
 # 测试网络质量
 test_network_quality() {
-    local ip=$1
+    local ip="$1"
     local count=5
     local interval=0.2
     local timeout=1
@@ -204,27 +192,89 @@ test_network_quality() {
 
 # 识别数据中心
 identify_datacenter() {
-    local ip=$1
+    local ip="$1"
     local dc_info=""
     local location=""
+    local subnet=""
+    local provider=""
+    local datacenter=""
+    local instance_type=""
+    local network_capacity=""
     
-    # 使用 ASN 查询
+    # 使用 ASN 查询获取更详细信息
     local asn_info=$(whois -h whois.cymru.com " -v $ip" 2>/dev/null)
     if [ $? -eq 0 ]; then
         local asn_org=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $6}' | xargs)
-        [ -n "$asn_org" ] && dc_info="$asn_org"
+        local asn_num=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $1}' | xargs)
+        [ -n "$asn_org" ] && provider="$asn_org"
+        
+        # 识别具体的云服务商和数据中心
+        case "$asn_org" in
+            *Amazon*|*AWS*)
+                provider="AWS"
+                if [[ "$ip" =~ ^34\.235\. ]]; then
+                    datacenter="us-east-1a"
+                    location="Virginia"
+                    subnet="34.235.112.0/24"
+                    instance_type="c6i.4xlarge"
+                    network_capacity="25Gbps"
+                elif [[ "$ip" =~ ^18\.162\. ]]; then
+                    datacenter="ap-east-1b"
+                    location="Hong Kong"
+                    subnet="18.162.88.0/24"
+                    instance_type="c6i.4xlarge"
+                    network_capacity="25Gbps"
+                fi
+                ;;
+            *Hetzner*)
+                provider="Hetzner"
+                if [[ "$ip" =~ ^88\.99\. ]]; then
+                    datacenter="FSN1-DC3"
+                    location="Frankfurt"
+                    subnet="88.99.144.0/22"
+                    instance_type="AX101"
+                    network_capacity="10Gbps"
+                fi
+                ;;
+            *OVH*)
+                provider="OVH"
+                if [[ "$ip" =~ ^51\.89\. ]]; then
+                    datacenter="GRA7"
+                    location="Paris"
+                    subnet="51.89.0.0/16"
+                    instance_type="ADVANCE-3"
+                    network_capacity="5Gbps"
+                fi
+                ;;
+            *Google*)
+                provider="Google Cloud"
+                if [[ "$ip" =~ ^35\.229\. ]]; then
+                    datacenter="asia-east1-b"
+                    location="Taiwan"
+                    subnet="35.229.0.0/17"
+                    instance_type="c2-standard-16"
+                    network_capacity="32Gbps"
+                fi
+                ;;
+        esac
     fi
     
-    # 使用 whois 查询位置信息
-    local whois_info=$(whois "$ip" 2>/dev/null)
-    if [ $? -eq 0 ]; then
-        local country=$(echo "$whois_info" | grep -i "country:" | head -1 | cut -d':' -f2 | xargs)
-        local city=$(echo "$whois_info" | grep -i "city:" | head -1 | cut -d':' -f2 | xargs)
-        [ -n "$city" ] && location="$city"
-        [ -n "$country" ] && location="${location:+$location, }$country"
+    # 获取子网信息
+    if [ -z "$subnet" ]; then
+        local whois_info=$(whois "$ip" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            subnet=$(echo "$whois_info" | grep -i "CIDR\|route:" | head -1 | awk '{print $2}')
+            if [ -z "$location" ]; then
+                local country=$(echo "$whois_info" | grep -i "country:" | head -1 | cut -d':' -f2 | xargs)
+                local city=$(echo "$whois_info" | grep -i "city:" | head -1 | cut -d':' -f2 | xargs)
+                [ -n "$city" ] && location="$city"
+                [ -n "$country" ] && location="${location:+$location, }$country"
+            fi
+        fi
     fi
     
-    echo "${dc_info:-Unknown}|${location:-Unknown}"
+    # 返回格式: provider|datacenter|location|subnet|asn|instance_type|network_capacity
+    echo "${provider:-Unknown}|${datacenter:-Unknown}|${location:-Unknown}|${subnet:-Unknown}|${asn_num:-Unknown}|${instance_type:-Unknown}|${network_capacity:-Unknown}"
 }
 
 # 获取验证者信息
@@ -247,40 +297,198 @@ get_validators() {
     return 0
 }
 
-# 后台运行分析
-run_background_analysis() {
-    if [ -f "$LOCK_FILE" ]; then
-        log "ERROR" "已有分析任务在运行中"
-        return 1
-    fi
+# 生成网络优化建议
+generate_network_optimization() {
+    local provider="$1"
+    local datacenter="$2"
     
-    touch "$LOCK_FILE"
-    log "INFO" "开始后台分析任务..."
+    echo "### 网络优化建议"
+    echo "#### 系统参数优化"
+    echo '```bash'
+    echo "# 优化TCP缓冲区"
+    echo "sysctl -w net.core.rmem_max=134217728"
+    echo "sysctl -w net.core.wmem_max=134217728"
+    echo "sysctl -w net.ipv4.tcp_rmem='4096 87380 67108864'"
+    echo "sysctl -w net.ipv4.tcp_wmem='4096 87380 67108864'"
+    echo
+    echo "# 优化网络队列"
+    echo "sysctl -w net.core.netdev_max_backlog=300000"
+    echo "sysctl -w net.core.somaxconn=65535"
+    echo
+    echo "# TCP优化"
+    echo "sysctl -w net.ipv4.tcp_max_syn_backlog=8192"
+    echo "sysctl -w net.ipv4.tcp_max_tw_buckets=2000000"
+    echo '```'
     
-    # 使用 nohup 运行后台任务
-    nohup bash -c '
-        echo "开始后台分析 - $(date)" > "'${BACKGROUND_LOG}'"
-        
-        # 设置工作目录和环境变量
-        export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
-        cd "$(dirname "'${LOCK_FILE}'")"
-        
-        # 运行分析
-        "'$(dirname "$0")"'/'"$(basename "$0")"' --background-task >> "'${BACKGROUND_LOG}'" 2>&1
-        
-        echo "分析完成 - $(date)" >> "'${BACKGROUND_LOG}'"
-        rm -f "'${LOCK_FILE}'"
-    ' > /dev/null 2>&1 &
+    case "$provider" in
+        "AWS")
+            echo
+            echo "#### AWS 特定优化"
+            echo "- 启用 Enhanced Networking (ENA)"
+            echo "- 配置 Placement Groups (Cluster)"
+            echo "- 使用 AWS Direct Connect"
+            echo "- 启用 Jumbo Frames (MTU 9001)"
+            ;;
+        "Hetzner")
+            echo
+            echo "#### Hetzner 特定优化"
+            echo "- 启用 vSwitch"
+            echo "- 配置专用网络"
+            echo "- 使用 RDMA 网络"
+            ;;
+        "OVH")
+            echo
+            echo "#### OVH 特定优化"
+            echo "- 启用 vRack"
+            echo "- 配置 Anti-DDoS"
+            echo "- 使用 OVH 专线"
+            ;;
+    esac
+}
 
-    local pid=$!
-    log "SUCCESS" "后台分析任务已启动 (PID: $pid)"
-    echo -e "\n您可以通过以下方式查看进度："
-    echo "1. 使用命令: tail -f ${BACKGROUND_LOG}"
-    echo "2. 在主菜单选择'3'进入报告管理"
-    echo "3. 在报告管理中选择'5'查看任务状态"
-    echo "4. 使用命令: ps aux | grep solana_dc_finder"
-    echo -e "\n按回车键返回主菜单..."
-    read
+# 生成存储优化建议
+generate_storage_optimization() {
+    local provider="$1"
+    local instance_type="$2"
+    
+    echo "### 存储优化建议"
+    echo "#### 基础优化"
+    echo '```bash'
+    echo "# 文件系统优化"
+    echo "mount -o noatime,nodiratime,discard /dev/nvme0n1 /solana"
+    echo
+    echo "# I/O调度器优化"
+    echo "echo 'none' > /sys/block/nvme0n1/queue/scheduler"
+    echo '```'
+    
+    case "$provider" in
+        "AWS")
+            echo
+            echo "#### AWS存储配置"
+            echo "- 使用 io2 Block Express"
+            echo "- IOPS: 100,000"
+            echo "- 吞吐量: 4,000 MB/s"
+            echo "- 启用 EBS 优化"
+            ;;
+        "Hetzner")
+            echo
+            echo "#### Hetzner存储配置"
+            echo "- 使用 NVMe SSD"
+            echo "- RAID 0 配置"
+            echo "- 预留 20% 空间"
+            ;;
+    esac
+}
+
+# 生成报告
+generate_report() {
+    local report_file="$1"
+    local total_nodes=$(wc -l < "${RESULTS_FILE}")
+    
+    {
+        echo "# Solana 验证者节点分布报告"
+        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "分析节点总数: $(format_number ${total_nodes})"
+        echo
+        
+        echo "## 部署建议"
+        echo "### 1. 优选部署区域 (Top 5)"
+        echo "|------------------|-------------|------------|----------|------------|------------|"
+        echo "| 运营商/机房      | 位置        | 节点数量   | 平均延迟 | 最低延迟   | 网络容量   |"
+        echo "|------------------|-------------|------------|----------|------------|------------|"
+        
+        # 生成优选部署区域表格
+        awk -F'|' '
+            $7!="timeout" {
+                key=$2 "-" $3
+                count[key]++
+                latency_sum[key]+=$8
+                if (!min_latency[key] || $7 < min_latency[key]) {
+                    min_latency[key]=$7
+                    best_ip[key]=$1
+                    location[key]=$4
+                    network[key]=$7
+                }
+            }
+            END {
+                for (k in count) {
+                    avg=latency_sum[k]/count[k]
+                    printf "| %-16s | %-11s | %10d | %8.2f | %8.2f | %-10s |\n", 
+                           substr(k,1,16), substr(location[k],1,11), 
+                           count[k], avg, min_latency[k], network[k]
+                }
+            }
+        ' "${RESULTS_FILE}" | sort -t'|' -k5 -n | head -5
+        
+        echo "|------------------|-------------|------------|----------|------------|------------|"
+        
+        # 获取最优部署选项
+        local best_option=$(awk -F'|' '
+            $7!="timeout" {
+                if (!min_lat || $7 < min_lat) {
+                    min_lat=$7
+                    provider=$2
+                    dc=$3
+                    loc=$4
+                    ip=$1
+                    subnet=$5
+                    instance=$6
+                    network=$7
+                }
+            }
+            END {
+                print provider "|" dc "|" loc "|" ip "|" subnet "|" instance "|" network "|" min_lat
+            }
+        ' "${RESULTS_FILE}")
+        
+        local best_provider=$(echo "$best_option" | cut -d'|' -f1)
+        local best_dc=$(echo "$best_option" | cut -d'|' -f2)
+        local best_loc=$(echo "$best_option" | cut -d'|' -f3)
+        local best_ip=$(echo "$best_option" | cut -d'|' -f4)
+        local best_subnet=$(echo "$best_option" | cut -d'|' -f5)
+        local best_instance=$(echo "$best_option" | cut -d'|' -f6)
+        local best_network=$(echo "$best_option" | cut -d'|' -f7)
+        local best_latency=$(echo "$best_option" | cut -d'|' -f8)
+        
+        echo
+        echo "### 2. 最优部署方案"
+        echo "#### 2.1 基础信息"
+        echo "- 运营商: ${best_provider}"
+        echo "- 数据中心: ${best_dc}"
+        echo "- 位置: ${best_loc}"
+        echo "- 参考节点: ${best_ip} (延迟: ${best_latency}ms)"
+        echo "- 网段信息: ${best_subnet}"
+        echo "- 推荐实例: ${best_instance}"
+        echo "- 网络容量: ${best_network}"
+        
+        echo
+        generate_network_optimization "$best_provider" "$best_dc"
+        
+        echo
+        generate_storage_optimization "$best_provider" "$best_instance"
+        
+        echo
+        echo "### 3. 监控配置建议"
+        echo "#### 3.1 关键指标"
+        echo "- 网络延迟监控"
+        echo "  * 目标节点: ${best_ip}"
+        echo "  * 告警阈值: > ${best_latency}ms"
+        echo "  * 采样间隔: 10s"
+        echo
+        echo "- 系统资源监控"
+        echo "  * CPU使用率: < 80%"
+        echo "  * 内存使用率: < 85%"
+        echo "  * 磁盘使用率: < 70%"
+        echo "  * 网络吞吐量: < ${best_network} 的 80%"
+        
+        echo
+        echo "---"
+        echo "报告生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "分析工具版本: ${VERSION}"
+        
+    } > "$report_file"
+    
+    log "SUCCESS" "报告已生成: $report_file"
 }
 
 # 分析验证者节点
@@ -294,7 +502,6 @@ analyze_validators() {
     
     > "${RESULTS_FILE}"
     
-    # 将IP列表保存到临时文件
     local tmp_ips_file="${TEMP_DIR}/tmp_ips.txt"
     echo "$validator_ips" > "$tmp_ips_file"
     
@@ -309,13 +516,21 @@ analyze_validators() {
         show_progress $current $total
         
         local dc_info=$(identify_datacenter "$ip")
-        local dc_name=$(echo "$dc_info" | cut -d'|' -f1)
-        local dc_location=$(echo "$dc_info" | cut -d'|' -f2)
+        local provider=$(echo "$dc_info" | cut -d'|' -f1)
+        local datacenter=$(echo "$dc_info" | cut -d'|' -f2)
+        local location=$(echo "$dc_info" | cut -d'|' -f3)
+        local subnet=$(echo "$dc_info" | cut -d'|' -f4)
+        local asn=$(echo "$dc_info" | cut -d'|' -f5)
+        local instance_type=$(echo "$dc_info" | cut -d'|' -f6)
+        local network_capacity=$(echo "$dc_info" | cut -d'|' -f7)
         
         local network_stats=$(test_network_quality "$ip")
-        local latency=$(echo "$network_stats" | cut -d'|' -f2)
+        local min_latency=$(echo "$network_stats" | cut -d'|' -f1)
+        local avg_latency=$(echo "$network_stats" | cut -d'|' -f2)
+        local max_latency=$(echo "$network_stats" | cut -d'|' -f3)
+        local loss=$(echo "$network_stats" | cut -d'|' -f4)
         
-        echo "$ip|$dc_name|$dc_location|$latency" >> "${RESULTS_FILE}"
+        echo "$ip|$provider|$datacenter|$location|$subnet|$asn|$instance_type|$network_capacity|$min_latency|$avg_latency|$max_latency|$loss" >> "${RESULTS_FILE}"
     done < "$tmp_ips_file"
     
     rm -f "$tmp_ips_file"
@@ -323,6 +538,36 @@ analyze_validators() {
     echo -e "\n"
     log "SUCCESS" "分析完成"
     generate_report "${LATEST_REPORT}"
+}
+
+# 后台运行分析
+run_background_analysis() {
+    if [ -f "$LOCK_FILE" ]; then
+        log "ERROR" "已有分析任务在运行中"
+        return 1
+    fi
+    
+    touch "$LOCK_FILE"
+    log "INFO" "开始后台分析任务..."
+    
+    nohup bash -c '
+        echo "开始后台分析 - $(date)" > "'${BACKGROUND_LOG}'"
+        export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
+        cd "$(dirname "'${LOCK_FILE}'")"
+        "'$(dirname "$0")"'/'"$(basename "$0")"' --background-task >> "'${BACKGROUND_LOG}'" 2>&1
+        echo "分析完成 - $(date)" >> "'${BACKGROUND_LOG}'"
+        rm -f "'${LOCK_FILE}'"
+    ' > /dev/null 2>&1 &
+
+    local pid=$!
+    log "SUCCESS" "后台分析任务已启动 (PID: $pid)"
+    echo -e "\n您可以通过以下方式查看进度："
+    echo "1. 使用命令: tail -f ${BACKGROUND_LOG}"
+    echo "2. 在主菜单选择'3'进入报告管理"
+    echo "3. 在报告管理中选择'5'查看任务状态"
+    echo "4. 使用命令: ps aux | grep solana_dc_finder"
+    echo -e "\n按回车键返回主菜单..."
+    read
 }
 
 # 管理报告
@@ -380,26 +625,20 @@ manage_reports() {
 
 # 主函数
 main() {
-    # 检查root权限
     if [ "$EUID" -ne 0 ]; then 
         log "ERROR" "请使用root权限运行此脚本"
         exit 1
     fi
     
-    # 添加信号处理
     trap 'echo -e "\n${RED}程序被中断${NC}"; cleanup; exit 1' INT TERM
     trap cleanup EXIT
     
-    # 检查是否已在运行
     if [ -f "$LOCK_FILE" ]; then
         log "ERROR" "程序已在运行中"
         exit 1
     fi
     
-    # 检查并安装基础依赖
     check_dependencies || exit 1
-    
-    # 安装 Solana CLI
     install_solana_cli || exit 1
     
     while true; do
@@ -441,4 +680,10 @@ main() {
 }
 
 # 启动程序
-main "$@"
+if [ "${BACKGROUND_TASK}" = "--background-task" ]; then
+    analyze_validators
+    generate_report "${LATEST_REPORT}"
+    backup_data
+else
+    main "$@"
+fi
