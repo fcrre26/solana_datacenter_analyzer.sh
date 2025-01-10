@@ -567,7 +567,7 @@ analyze_validators() {
     log "INFO" "开始分析验证者节点分布"
     
     # 添加调试信息
-    log "DEBUG" "正在执行 get_validators..."
+    log "INFO" "正在执行 get_validators..."
     
     local validator_ips
     validator_ips=$(get_validators) || {
@@ -575,7 +575,11 @@ analyze_validators() {
         return 1
     }
     
-    > "${RESULTS_FILE}"
+    # 确保目录存在
+    mkdir -p "${TEMP_DIR}"
+    
+    # 清空结果文件
+    : > "${RESULTS_FILE}"
     
     local tmp_ips_file="${TEMP_DIR}/tmp_ips.txt"
     echo "$validator_ips" > "$tmp_ips_file"
@@ -588,57 +592,82 @@ analyze_validators() {
     echo -e "\n${YELLOW}正在分析节点位置信息...${NC}"
     
     # 添加错误处理和进度保存
-    while read -r ip; do
-        ((current++))
-        show_progress "$current" "$total"
+    {
+        while read -r ip; do
+            ((current++))
+            show_progress "$current" "$total"
+            
+            # 添加调试信息
+            log "DEBUG" "正在分析 IP: $ip ($current/$total)"
+            
+            {
+                local dc_info
+                dc_info=$(identify_datacenter "$ip") || {
+                    log "WARN" "无法识别数据中心信息: $ip"
+                    echo "$ip|Unknown|Unknown|Unknown|Unknown|Unknown|Unknown|Unknown|timeout|timeout|timeout|100" >> "${RESULTS_FILE}"
+                    continue
+                }
+                
+                local network_stats
+                network_stats=$(test_network_quality "$ip") || {
+                    log "WARN" "无法测试网络质量: $ip"
+                    network_stats="timeout|timeout|timeout|100"
+                }
+                
+                # 解析数据中心信息
+                local provider datacenter location subnet asn instance_type network_capacity
+                provider=$(echo "$dc_info" | cut -d'|' -f1)
+                datacenter=$(echo "$dc_info" | cut -d'|' -f2)
+                location=$(echo "$dc_info" | cut -d'|' -f3)
+                subnet=$(echo "$dc_info" | cut -d'|' -f4)
+                asn=$(echo "$dc_info" | cut -d'|' -f5)
+                instance_type=$(echo "$dc_info" | cut -d'|' -f6)
+                network_capacity=$(echo "$dc_info" | cut -d'|' -f7)
+                
+                # 解析网络测试结果
+                local min_latency avg_latency max_latency loss
+                min_latency=$(echo "$network_stats" | cut -d'|' -f1)
+                avg_latency=$(echo "$network_stats" | cut -d'|' -f2)
+                max_latency=$(echo "$network_stats" | cut -d'|' -f3)
+                loss=$(echo "$network_stats" | cut -d'|' -f4)
+                
+                # 保存结果
+                echo "$ip|$provider|$datacenter|$location|$subnet|$asn|$instance_type|$network_capacity|$min_latency|$avg_latency|$max_latency|$loss" >> "${RESULTS_FILE}"
+                
+                # 每100个节点保存一次进度
+                if ((current % 100 == 0)); then
+                    log "INFO" "已完成 $current/$total 个节点分析"
+                fi
+            } || {
+                log "ERROR" "处理节点 $ip 时发生错误"
+                continue
+            }
+            
+        done < "$tmp_ips_file"
         
-        # 添加调试信息
-        log "DEBUG" "正在分析 IP: $ip ($current/$total)"
+        rm -f "$tmp_ips_file"
         
-        local dc_info
-        dc_info=$(identify_datacenter "$ip") || {
-            log "WARN" "无法识别数据中心信息: $ip"
-            continue
-        }
+        echo -e "\n"
+        log "SUCCESS" "分析完成，共处理 $current 个节点"
         
-        local network_stats
-        network_stats=$(test_network_quality "$ip") || {
-            log "WARN" "无法测试网络质量: $ip"
-            continue
-        }
-        
-        # 解析数据中心信息
-        local provider datacenter location subnet asn instance_type network_capacity
-        provider=$(echo "$dc_info" | cut -d'|' -f1)
-        datacenter=$(echo "$dc_info" | cut -d'|' -f2)
-        location=$(echo "$dc_info" | cut -d'|' -f3)
-        subnet=$(echo "$dc_info" | cut -d'|' -f4)
-        asn=$(echo "$dc_info" | cut -d'|' -f5)
-        instance_type=$(echo "$dc_info" | cut -d'|' -f6)
-        network_capacity=$(echo "$dc_info" | cut -d'|' -f7)
-        
-        # 解析网络测试结果
-        local min_latency avg_latency max_latency loss
-        min_latency=$(echo "$network_stats" | cut -d'|' -f1)
-        avg_latency=$(echo "$network_stats" | cut -d'|' -f2)
-        max_latency=$(echo "$network_stats" | cut -d'|' -f3)
-        loss=$(echo "$network_stats" | cut -d'|' -f4)
-        
-        # 保存结果
-        echo "$ip|$provider|$datacenter|$location|$subnet|$asn|$instance_type|$network_capacity|$min_latency|$avg_latency|$max_latency|$loss" >> "${RESULTS_FILE}"
-        
-        # 每100个节点保存一次进度
-        if ((current % 100 == 0)); then
-            log "INFO" "已完成 $current/$total 个节点分析"
+        # 检查结果文件
+        if [ ! -s "${RESULTS_FILE}" ]; then
+            log "ERROR" "结果文件为空"
+            return 1
         fi
         
-    done < "$tmp_ips_file"
-    
-    rm -f "$tmp_ips_file"
-    
-    echo -e "\n"
-    log "SUCCESS" "分析完成，共处理 $current 个节点"
-    generate_report "${LATEST_REPORT}"
+        # 生成报告
+        generate_report "${LATEST_REPORT}" || {
+            log "ERROR" "生成报告失败"
+            return 1
+        }
+        
+        return 0
+        
+    } || {
+        log "ERROR" "分析过程中发生错误"
+        return 1
+    }
 }
 
 # 后台运行分析
@@ -703,7 +732,13 @@ main() {
         echo -ne "请选择操作 [0-5]: "
         
         read -r choice
-        case $choice in
+case $choice in
+    1) analyze_validators || {
+           log "ERROR" "验证者节点分析失败"
+           read -rp "按回车键继续..."
+       }
+       ;;
+ 
             1) analyze_validators ;;
             2) run_background_analysis ;;
             3) manage_reports ;;
