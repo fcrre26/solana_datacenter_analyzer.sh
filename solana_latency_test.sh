@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 设置环境变量
+export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
+
 # 启用严格模式
 set -euo pipefail
 
@@ -120,10 +123,8 @@ install_solana_cli() {
             return 1
         }
         
-        # 配置环境变量
-        echo 'export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"' >> /root/.bashrc
+        # 直接设置环境变量，不修改 .bashrc
         export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
-        source /root/.bashrc
         
         # 验证安装
         if ! command -v solana &>/dev/null; then
@@ -133,30 +134,32 @@ install_solana_cli() {
         
         # 显示版本信息
         local version
-        version=$(solana --version)
+        version=$(solana --version 2>/dev/null)
         log "INFO" "Solana CLI 版本: $version"
         
         # 配置 Solana CLI
-        solana config set --url https://api.mainnet-beta.solana.com
-        if [ $? -ne 0 ]; then
+        solana config set --url https://api.mainnet-beta.solana.com || {
             log "ERROR" "Solana CLI 配置失败"
             return 1
-        fi
+        }
         
         log "SUCCESS" "Solana CLI 安装成功"
     else
+        # 确保环境变量设置正确
+        export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
         log "INFO" "Solana CLI 已安装"
         solana config set --url https://api.mainnet-beta.solana.com
     fi
     
     # 测试连接
-    if ! solana gossip 2>/dev/null; then
+    if ! solana gossip >/dev/null 2>&1; then
         log "ERROR" "无法连接到 Solana 网络"
         return 1
     fi
     
     return 0
 }
+
 # 检查后台任务状态
 check_background_task() {
     if [ -f "$LOCK_FILE" ]; then
