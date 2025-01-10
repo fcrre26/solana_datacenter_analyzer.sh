@@ -8,11 +8,12 @@ export PATH="$SOLANA_INSTALL_DIR/active_release/bin:$PATH"
 set -eo pipefail
 
 # 颜色定义
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-NC='\033[0m'
+GREEN='\033[0;32m'      # 绿色
+RED='\033[0;31m'        # 红色
+YELLOW='\033[1;33m'     # 黄色
+CYAN='\033[0;36m'       # 青色
+WHITE='\033[1;37m'      # 亮白色
+NC='\033[0m'            # 重置颜色
 
 # 标识符定义
 INFO="[INFO]"
@@ -50,13 +51,35 @@ log() {
     
     if [ "${BACKGROUND_MODE:-false}" = "false" ]; then
         case "$level" in
-            "INFO")    echo -e "${BLUE}${INFO} ${message}${NC}" ;;
+            "INFO")    echo -e "${GREEN}${INFO} ${message}${NC}" ;;
             "ERROR")   echo -e "${RED}${ERROR} ${message}${NC}" ;;
             "SUCCESS") echo -e "${GREEN}${SUCCESS} ${message}${NC}" ;;
             "WARN")    echo -e "${YELLOW}${WARN} ${message}${NC}" ;;
             *) echo -e "${message}" ;;
         esac
     fi
+}
+
+# 显示菜单
+show_menu() {
+    clear  # 清屏，让显示更整洁
+    echo -e "\n${GREEN}▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄${NC}"
+    echo -e "${GREEN}█       Solana 验证者节点延迟分析工具       █${NC}"
+    echo -e "${GREEN}█                ${WHITE}版本: ${VERSION}${GREEN}                █${NC}"
+    echo -e "${GREEN}▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀${NC}"
+    echo -e ""
+    echo -e "${GREEN}╔════════════════ 功能菜单 ═══════════════╗${NC}"
+    echo -e "${GREEN}║                                         ║${NC}"
+    echo -e "${GREEN}║  ${WHITE}1${GREEN}. ${WHITE}分析所有验证者节点延迟             ${GREEN}║${NC}"
+    echo -e "${GREEN}║  ${WHITE}2${GREEN}. ${WHITE}在后台分析所有节点                 ${GREEN}║${NC}"
+    echo -e "${GREEN}║  ${WHITE}3${GREEN}. ${WHITE}测试指定IP的延迟                   ${GREEN}║${NC}"
+    echo -e "${GREEN}║  ${WHITE}4${GREEN}. ${WHITE}查看最新分析报告                   ${GREEN}║${NC}"
+    echo -e "${GREEN}║  ${WHITE}5${GREEN}. ${WHITE}查看后台任务状态                   ${GREEN}║${NC}"
+    echo -e "${GREEN}║  ${RED}0${GREEN}. ${RED}退出程序                           ${GREEN}║${NC}"
+    echo -e "${GREEN}║                                         ║${NC}"
+    echo -e "${GREEN}╚═════════════════════════════════════════╝${NC}"
+    echo -e ""
+    echo -ne "${GREEN}请输入您的选择 ${WHITE}[0-5]${GREEN}: ${NC}"
 }
 
 # 测试网络质量
@@ -161,18 +184,37 @@ update_progress() {
     local location="$5"
     
     local progress=$((current * 100 / total))
-    local progress_msg="[$current/$total] ${progress}% - 测试: $ip (延迟: ${latency}ms, 位置: $location)"
     
-    if [ "${BACKGROUND_MODE:-false}" = "true" ]; then
-        echo "$progress_msg" >> "${BACKGROUND_LOG}"
+    # 根据延迟值设置颜色
+    local latency_color
+    local latency_display
+    if [ "$latency" = "999" ]; then
+        latency_color=$RED
+        latency_display="超时"
+    elif [ "$latency" -lt 100 ]; then
+        latency_color=$GREEN
+        latency_display="${latency}ms"
     else
-        echo -ne "\r${BLUE}${progress_msg}${NC}"
+        latency_color=$YELLOW
+        latency_display="${latency}ms"
     fi
+    
+    # 进度条
+    local bar_size=20
+    local completed=$((progress * bar_size / 100))
+    local remaining=$((bar_size - completed))
+    local progress_bar=""
+    for ((i=0; i<completed; i++)); do progress_bar+="█"; done
+    for ((i=0; i<remaining; i++)); do progress_bar+="░"; done
+    
+    # 格式化进度显示
+    printf "\r${GREEN}[%s] %3d%%${NC} | ${CYAN}%-15s${NC} | 延迟: ${latency_color}%-8s${NC} | 位置: ${WHITE}%-20s${NC}" \
+        "$progress_bar" "$progress" "$ip" "$latency_display" "${location:-Unknown}"
 }
 
 # 分析验证者节点
 analyze_validators() {
-    local background="${1:-false}"  # 添加默认值
+    local background="${1:-false}"
     BACKGROUND_MODE="$background"
     
     log "INFO" "开始分析验证者节点分布"
@@ -223,11 +265,11 @@ generate_report() {
     log "INFO" "正在生成报告..."
     
     {
-        echo "# Solana 验证者节点延迟分析报告"
+        echo -e "${GREEN}# Solana 验证者节点延迟分析报告${NC}"
         echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo
         
-        echo "## 延迟统计 (Top 20)"
+        echo -e "${GREEN}## 延迟统计 (Top 20)${NC}"
         echo "| IP地址 | 位置 | 延迟(ms) | 供应商 |"
         echo "|---------|------|-----------|---------|"
         
@@ -238,7 +280,7 @@ generate_report() {
         done
         
         echo
-        echo "## 供应商分布"
+        echo -e "${GREEN}## 供应商分布${NC}"
         echo "| 供应商 | 节点数量 | 平均延迟(ms) |"
         echo "|---------|------------|--------------|"
         
@@ -256,7 +298,7 @@ generate_report() {
         }' "${RESULTS_FILE}" | sort -t'|' -k3 -n
         
         echo
-        echo "## 位置分布"
+        echo -e "${GREEN}## 位置分布${NC}"
         echo "| 位置 | 节点数量 | 平均延迟(ms) |"
         echo "|------|------------|--------------|"
         
@@ -346,50 +388,56 @@ cleanup() {
 test_single_ip() {
     local ip="$1"
     
-    echo -e "\n测试 IP: $ip"
-    echo "===================="
+    echo -e "\n${GREEN}╔════════════════ IP测试 ═════════════════╗${NC}"
+    echo -e "${GREEN}║                                         ║${NC}"
+    echo -e "${GREEN}║  ${WHITE}测试IP: ${CYAN}%-30s${GREEN}║${NC}" "$ip"
     
     local latency=$(test_network_quality "$ip")
     local dc_info=$(identify_datacenter "$ip")
     local provider=$(echo "$dc_info" | cut -d'|' -f1)
     local location=$(echo "$dc_info" | cut -d'|' -f2)
     
-    echo "延迟: ${latency}ms"
-    echo "位置: $location"
-    echo "供应商: $provider"
-    echo "===================="
+    # 根据延迟值设置颜色
+    local latency_color
+    if [ "$latency" = "999" ]; then
+        latency_color=$RED
+        latency="超时"
+    elif [ "$latency" -lt 100 ]; then
+        latency_color=$GREEN
+    else
+        latency_color=$YELLOW
+    fi
+    
+    echo -e "${GREEN}║  ${WHITE}延迟: ${latency_color}%-30s${GREEN}║${NC}" "${latency}ms"
+    echo -e "${GREEN}║  ${WHITE}位置: ${WHITE}%-30s${GREEN}║${NC}" "$location"
+    echo -e "${GREEN}║  ${WHITE}供应商: ${CYAN}%-28s${GREEN}║${NC}" "$provider"
+    echo -e "${GREEN}║                                         ║${NC}"
+    echo -e "${GREEN}╚═════════════════════════════════════════╝${NC}"
 }
 
 # 检查后台任务状态
 check_background_task() {
     if [ -f "${BACKGROUND_LOG}" ]; then
-        echo -e "\n${BLUE}后台任务状态：${NC}"
-        echo "===================="
-        tail -n 10 "${BACKGROUND_LOG}"
-        echo "===================="
+        echo -e "\n${GREEN}╔═══════════════ 任务状态 ════════════════╗${NC}"
+        echo -e "${GREEN}║                                         ║${NC}"
         
         if grep -q "分析完成" "${BACKGROUND_LOG}"; then
-            echo -e "\n${GREEN}任务已完成！${NC}"
+            echo -e "${GREEN}║  ${WHITE}状态: ${GREEN}已完成                          ${GREEN}║${NC}"
         else
-            echo -e "\n${YELLOW}任务正在运行中...${NC}"
+            echo -e "${GREEN}║  ${WHITE}状态: ${YELLOW}运行中                          ${GREEN}║${NC}"
         fi
+        
+        echo -e "${GREEN}║                                         ║${NC}"
+        echo -e "${GREEN}║  ${WHITE}最新进度:                              ${GREEN}║${NC}"
+        tail -n 5 "${BACKGROUND_LOG}" | while read -r line; do
+            printf "${GREEN}║  ${WHITE}%-39s${GREEN}║${NC}\n" "$line"
+        done
+        
+        echo -e "${GREEN}║                                         ║${NC}"
+        echo -e "${GREEN}╚═════════════════════════════════════════╝${NC}"
     else
         echo -e "\n${YELLOW}没有运行中的后台任务${NC}"
     fi
-}
-
-# 主菜单
-show_menu() {
-    echo -e "\n${BLUE}Solana 验证者节点延迟分析工具 ${VERSION}${NC}"
-    echo "=================================="
-    echo "1. 分析所有验证者节点延迟"
-    echo "2. 在后台分析所有节点"
-    echo "3. 测试指定IP的延迟"
-    echo "4. 查看最新分析报告"
-    echo "5. 查看后台任务状态"
-    echo "0. 退出"
-    echo "=================================="
-    echo -ne "请选择操作 [0-5]: "
 }
 
 # 主函数
@@ -434,7 +482,7 @@ main() {
                 log "SUCCESS" "后台任务已启动，使用选项 5 查看进度"
                 read -rp "按回车键继续..."
                 ;;
-            3)  echo -ne "\n请输入要测试的IP地址: "
+            3)  echo -ne "\n${GREEN}请输入要测试的IP地址: ${NC}"
                 read -r test_ip
                 if [[ $test_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
                     test_single_ip "$test_ip"
