@@ -1166,9 +1166,9 @@ show_config_menu() {
         read -r choice
 
         case $choice in
-            1)  echo -ne "请输入新的并发数 [1-50]: "
+            1)  echo -ne "请输入新的并发数 [1-200]: "
                 read -r new_jobs
-                if [[ "$new_jobs" =~ ^[1-9][0-9]?$ ]] && [ "$new_jobs" -le 50 ]; then
+                if [[ "$new_jobs" =~ ^[1-9][0-9]?$ ]] && [ "$new_jobs" -le 200 ]; then
                     sed -i "s/MAX_CONCURRENT_JOBS=.*/MAX_CONCURRENT_JOBS=$new_jobs/" "$CONFIG_FILE"
                     log "SUCCESS" "并发数已更新为: $new_jobs"
                 else
