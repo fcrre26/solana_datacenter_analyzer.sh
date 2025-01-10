@@ -1168,11 +1168,11 @@ show_config_menu() {
         case $choice in
             1)  echo -ne "请输入新的并发数 [1-200]: "
                 read -r new_jobs
-                if [[ "$new_jobs" =~ ^[1-9][0-9]?$ ]] && [ "$new_jobs" -le 200 ]; then
+                if [[ "$new_jobs" =~ ^[1-9][0-9]*$ ]] && [ "$new_jobs" -ge 1 ] && [ "$new_jobs" -le 200 ]; then
                     sed -i "s/MAX_CONCURRENT_JOBS=.*/MAX_CONCURRENT_JOBS=$new_jobs/" "$CONFIG_FILE"
                     log "SUCCESS" "并发数已更新为: $new_jobs"
                 else
-                    log "ERROR" "无效的并发数"
+                    log "ERROR" "无效的并发数，请输入1-200之间的数字"
                 fi
                 ;;
             2)  echo -ne "请输入新的超时时间 (秒) [1-10]: "
@@ -1211,6 +1211,10 @@ show_config_menu() {
         esac
         read -rp "按回车键继续..."
     done
+    
+    # 重新加载配置
+    load_config
+}
     
     # 重新加载配置
     load_config
