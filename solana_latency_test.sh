@@ -913,38 +913,40 @@ show_background_menu() {
         read -r choice
 
         case $choice in
-            1)  if [ -f "${TEMP_DIR}/background.pid" ]; then
-                    log "ERROR" "已有后台任务在运行"
-                else
-                    log "INFO" "启动后台分析任务..."
-                    
-                    # 获取脚本的完整路径
-                    SCRIPT_PATH=$(readlink -f "$0")
-                    
-                    # 确保目录存在
-                    mkdir -p "${TEMP_DIR}"
-                    mkdir -p "$(dirname "${BACKGROUND_LOG}")"
-                    
-                    # 使用 setsid 启动后台进程
-                    (setsid bash "${SCRIPT_PATH}" background > "${BACKGROUND_LOG}" 2>&1 & echo $! > "${TEMP_DIR}/background.pid")
-                    
-                    # 等待一下确保进程启动
-                    sleep 2
-                    
-                    if [ -f "${TEMP_DIR}/background.pid" ]; then
-                        local pid=$(cat "${TEMP_DIR}/background.pid")
-                        if kill -0 "$pid" 2>/dev/null; then
-                            log "SUCCESS" "后台任务已启动，进程ID: $pid"
-                            log "INFO" "可以使用选项 2 监控任务进度"
-                        else
-                            log "ERROR" "后台任务启动失败"
-                            rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
-                        fi
-                    else
-                        log "ERROR" "后台任务启动失败：无法创建PID文件"
-                    fi
-                fi
-                ;;
+1)  if [ -f "${TEMP_DIR}/background.pid" ]; then
+        log "ERROR" "已有后台任务在运行"
+    else
+        log "INFO" "启动后台分析任务..."
+        
+        # 获取脚本的完整路径
+        SCRIPT_PATH=$(readlink -f "$0")
+        
+        # 确保目录存在
+        mkdir -p "${TEMP_DIR}"
+        mkdir -p "$(dirname "${BACKGROUND_LOG}")"
+        
+        # 记录开始时间
+        date +%s > "${TEMP_DIR}/start_time"
+        
+        # 使用 nohup 启动后台进程
+        nohup bash "${SCRIPT_PATH}" background > "${BACKGROUND_LOG}" 2>&1 &
+        local pid=$!
+        
+        # 保存PID
+        echo $pid > "${TEMP_DIR}/background.pid"
+        
+        # 等待确保进程启动
+        sleep 2
+        
+        if kill -0 $pid 2>/dev/null; then
+            log "SUCCESS" "后台任务已启动，进程ID: $pid"
+            log "INFO" "可以使用选项 2 监控任务进度"
+        else
+            log "ERROR" "后台任务启动失败"
+            rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+        fi
+    fi
+    ;;
                 
             2)  if [ -f "${BACKGROUND_LOG}" ]; then
                     clear
