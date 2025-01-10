@@ -820,7 +820,7 @@ install_solana_cli() {
 
 # 检查依赖
 check_dependencies() {
-    local deps=("curl" "nc" "whois" "awk" "sort" "jq" "geoip-bin")
+    local deps=("curl" "nc" "whois" "awk" "sort" "jq")
     local missing=()
 
     for dep in "${deps[@]}"; do
@@ -831,14 +831,35 @@ check_dependencies() {
 
     if [ ${#missing[@]} -ne 0 ]; then
         log "INFO" "正在安装必要工具: ${missing[*]}"
-        apt-get update -qq && apt-get install -y -qq "${missing[@]}" || {
-            log "ERROR" "工具安装失败"
+        
+        # 更新软件源
+        log "INFO" "正在更新软件源..."
+        apt-get update -qq || {
+            log "ERROR" "更新软件源失败"
             return 1
         }
         
-        # 安装 GeoIP 数据库
-        apt-get install -y -qq geoip-database geoip-database-extra
+        # 安装依赖包
+        for pkg in "${missing[@]}"; do
+            log "INFO" "正在安装 ${pkg}..."
+            apt-get install -y -qq "$pkg" || {
+                log "ERROR" "安装 ${pkg} 失败"
+                return 1
+            }
+            log "SUCCESS" "已安装 ${pkg}"
+        done
     fi
+
+    # 单独处理 GeoIP 相关包
+    if ! command -v geoiplookup &>/dev/null; then
+        log "INFO" "正在安装 GeoIP 工具..."
+        apt-get install -y -qq geoip-bin geoip-database || {
+            log "ERROR" "安装 GeoIP 工具失败"
+            return 1
+        }
+        log "SUCCESS" "GeoIP 工具安装完成"
+    fi
+
     return 0
 }
 
