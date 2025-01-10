@@ -254,6 +254,118 @@ test_network_quality() {
     return 0
 }
 
+# 供应商识别函数
+identify_provider() {
+    local provider="$1"
+    local location="$2"
+    
+    # 初始化返回值
+    local cloud_provider=""
+    local region_code=""
+    local datacenter=""
+    
+    # 识别主要云服务商和数据中心
+    case "$provider" in
+        *"Amazon"*|*"AWS"*|*"AMAZON"*)
+            cloud_provider="AWS"
+            case "$location" in
+                *"Tokyo"*|*"Japan"*)          region_code="ap-northeast-1"; datacenter="东京数据中心" ;;
+                *"Singapore"*)                 region_code="ap-southeast-1"; datacenter="新加坡数据中心" ;;
+                *"Hong Kong"*)                 region_code="ap-east-1"; datacenter="香港数据中心" ;;
+                *"Seoul"*|*"Korea"*)          region_code="ap-northeast-2"; datacenter="首尔数据中心" ;;
+                *"Sydney"*|*"Australia"*)     region_code="ap-southeast-2"; datacenter="悉尼数据中心" ;;
+                *"Mumbai"*|*"India"*)         region_code="ap-south-1"; datacenter="孟买数据中心" ;;
+                *) datacenter="$location" ;;
+            esac
+            ;;
+            
+        *"Google"*|*"GCP"*|*"GOOGLE"*)
+            cloud_provider="Google Cloud"
+            case "$location" in
+                *"Tokyo"*|*"Japan"*)          region_code="asia-northeast1"; datacenter="东京-大森机房" ;;
+                *"Singapore"*)                 region_code="asia-southeast1"; datacenter="新加坡机房" ;;
+                *"Hong Kong"*)                 region_code="asia-east2"; datacenter="香港机房" ;;
+                *"Seoul"*|*"Korea"*)          region_code="asia-northeast3"; datacenter="首尔机房" ;;
+                *"Sydney"*|*"Australia"*)     region_code="australia-southeast1"; datacenter="悉尼机房" ;;
+                *"Mumbai"*|*"India"*)         region_code="asia-south1"; datacenter="孟买机房" ;;
+                *) datacenter="$location" ;;
+            esac
+            ;;
+            
+        *"Alibaba"*|*"Aliyun"*|*"阿里"*)
+            cloud_provider="阿里云"
+            case "$location" in
+                *"Hangzhou"*|*"杭州"*)        region_code="cn-hangzhou"; datacenter="杭州可用区" ;;
+                *"Shanghai"*|*"上海"*)        region_code="cn-shanghai"; datacenter="上海可用区" ;;
+                *"Hong Kong"*|*"香港"*)       region_code="cn-hongkong"; datacenter="香港可用区" ;;
+                *"Singapore"*|*"新加坡"*)     region_code="ap-southeast-1"; datacenter="新加坡可用区" ;;
+                *"Tokyo"*|*"东京"*)           region_code="ap-northeast-1"; datacenter="东京可用区" ;;
+                *) datacenter="$location" ;;
+            esac
+            ;;
+            
+        *"Azure"*|*"Microsoft"*)
+            cloud_provider="Azure"
+            case "$location" in
+                *"Hong Kong"*|*"香港"*)       region_code="eastasia"; datacenter="香港数据中心" ;;
+                *"Singapore"*|*"新加坡"*)     region_code="southeastasia"; datacenter="新加坡数据中心" ;;
+                *"Tokyo"*|*"东京"*)           region_code="japaneast"; datacenter="东京数据中心" ;;
+                *"Seoul"*|*"首尔"*)           region_code="koreacentral"; datacenter="首尔数据中心" ;;
+                *) datacenter="$location" ;;
+            esac
+            ;;
+            
+        *"Tencent"*|*"腾讯"*)
+            cloud_provider="腾讯云"
+            case "$location" in
+                *"Hong Kong"*|*"香港"*)       region_code="ap-hongkong"; datacenter="香港数据中心" ;;
+                *"Shanghai"*|*"上海"*)        region_code="ap-shanghai"; datacenter="上海金融云" ;;
+                *"Singapore"*|*"新加坡"*)     region_code="ap-singapore"; datacenter="新加坡数据中心" ;;
+                *"Tokyo"*|*"东京"*)           region_code="ap-tokyo"; datacenter="东京数据中心" ;;
+                *) datacenter="$location" ;;
+            esac
+            ;;
+            
+        # 其他主要供应商
+        *"DigitalOcean"*)
+            cloud_provider="DigitalOcean"
+            case "$location" in
+                *"Singapore"*)     region_code="sgp1"; datacenter="新加坡 SG1" ;;
+                *"Bangalore"*)     region_code="blr1"; datacenter="班加罗尔 BLR1" ;;
+                *) datacenter="$location" ;;
+            esac
+            ;;
+            
+        *"Vultr"*)
+            cloud_provider="Vultr"
+            case "$location" in
+                *"Tokyo"*)         region_code="nrt"; datacenter="东京 NRT" ;;
+                *"Singapore"*)     region_code="sgp"; datacenter="新加坡 SGP" ;;
+                *"Seoul"*)         region_code="icn"; datacenter="首尔 ICN" ;;
+                *) datacenter="$location" ;;
+            esac
+            ;;
+            
+        *"Linode"*|*"Akamai"*)
+            cloud_provider="Linode"
+            case "$location" in
+                *"Tokyo"*)         region_code="ap-northeast"; datacenter="东京数据中心" ;;
+                *"Singapore"*)     region_code="ap-south"; datacenter="新加坡数据中心" ;;
+                *) datacenter="$location" ;;
+            esac
+            ;;
+            
+        # 如果都不匹配，保留原始信息
+        *)
+            cloud_provider="$provider"
+            datacenter="$location"
+            region_code="unknown"
+            ;;
+    esac
+    
+    echo "$cloud_provider|$region_code|$datacenter"
+}
+
 # 获取验证者信息
 get_validators() {
     log "INFO" "正在获取验证者信息..."
@@ -374,33 +486,20 @@ analyze_validators() {
     
     log "INFO" "找到 ${total} 个验证者节点"
     echo "----------------------------------------"
-    
     while read -r ip; do
         ((current++))
         
         local latency=$(test_network_quality "$ip")
         local ip_info=$(get_ip_info "$ip")
-        local provider=""
-        local location=""
+        local provider_info=$(identify_provider "$(echo "$ip_info" | jq -r '.org // .isp // "Unknown"')" "$(echo "$ip_info" | jq -r '.city // "Unknown"'), $(echo "$ip_info" | jq -r '.country_name // .country // "Unknown"')")
         
-        # 解析 IP 信息
-        if [ -n "$ip_info" ]; then
-            if echo "$ip_info" | jq -e '.org' >/dev/null 2>&1; then
-                provider=$(echo "$ip_info" | jq -r '.org')
-            elif echo "$ip_info" | jq -e '.isp' >/dev/null 2>&1; then
-                provider=$(echo "$ip_info" | jq -r '.isp')
-            fi
-            
-            local city=$(echo "$ip_info" | jq -r '.city // empty')
-            local region=$(echo "$ip_info" | jq -r '.region // empty')
-            local country=$(echo "$ip_info" | jq -r '.country_name // .country // empty')
-            
-            location="${city:+$city}${region:+, $region}${country:+, $country}"
-        fi
+        local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
+        local region_code=$(echo "$provider_info" | cut -d'|' -f2)
+        local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
         
-        update_progress "$current" "$total" "$ip" "$latency" "${location:-Unknown}" "${provider:-Unknown}"
+        update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
         
-        echo "$ip|$provider|$location|$latency" >> "${RESULTS_FILE}"
+        echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "${RESULTS_FILE}"
         
     done < "${TEMP_DIR}/tmp_ips.txt"
     
@@ -414,55 +513,129 @@ analyze_validators() {
     fi
 }
 
-# 生成报告
-generate_report() {
-    log "INFO" "正在生成报告..."
-    
-    local total_nodes=$(wc -l < "${RESULTS_FILE}")
-    local avg_latency=$(awk -F'|' '$4!=999 { sum+=$4; count++ } END { if(count>0) printf "%.3f", sum/count }' "${RESULTS_FILE}")
-    local min_latency=$(sort -t'|' -k4 -n "${RESULTS_FILE}" | head -1 | cut -d'|' -f4)
-    local max_latency=$(sort -t'|' -k4 -n "${RESULTS_FILE}" | grep -v "999" | tail -1 | cut -d'|' -f4)
-    
-    {
-        echo "# Solana 验证者节点延迟分析报告"
-        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "总节点数: ${total_nodes}"
-        echo "平均延迟: ${avg_latency}ms"
-        echo "最低延迟: ${min_latency}ms"
-        echo "最高延迟: ${max_latency}ms"
+# 显示菜单函数
+show_menu() {
+    clear
+    echo
+    echo -e "${GREEN}Solana 验证者节点延迟分析工具 ${WHITE}v${VERSION}${NC}"
+    echo
+    echo -e "${GREEN}1. 分析所有验证者节点延迟 (单线程)${NC}"
+    echo -e "${GREEN}2. 并发分析所有节点 (推荐)${NC}"
+    echo -e "${GREEN}3. 测试指定IP的延迟${NC}"
+    echo -e "${GREEN}4. 查看最新分析报告${NC}"
+    echo -e "${GREEN}5. 后台任务管理${NC}"
+    echo -e "${GREEN}6. 配置设置${NC}"
+    echo -e "${RED}0. 退出程序${NC}"
+    echo
+    echo -ne "${GREEN}请输入您的选择 [0-6]: ${NC}"
+}
+
+# 后台任务管理菜单
+show_background_menu() {
+    while true; do
+        clear
+        echo -e "${GREEN}后台任务管理${NC}"
+        echo "==================="
+        echo -e "${GREEN}1. 启动后台并发分析${NC}"
+        echo -e "${GREEN}2. 实时监控后台任务${NC}"
+        echo -e "${GREEN}3. 停止后台任务${NC}"
+        echo -e "${GREEN}4. 查看后台任务状态${NC}"
+        echo -e "${GREEN}5. 查看最新报告${NC}"
+        echo -e "${RED}0. 返回主菜单${NC}"
         echo
-        
-        echo "## 延迟统计 (Top 20)"
-        echo "| IP地址 | 位置 | 延迟(ms) | 供应商 |"
-        echo "|--------|------|-----------|---------|"
-        
-        sort -t'|' -k4 -n "${RESULTS_FILE}" | head -20 | while IFS='|' read -r ip provider location latency; do
-            if [ "$latency" != "999" ]; then
-                printf "| %s | %s | %.3f | %s |\n" "$ip" "$location" "$latency" "$provider"
-            fi
-        done
-        
-        echo
-        echo "## 供应商分布"
-        echo "| 供应商 | 节点数量 | 平均延迟(ms) |"
-        echo "|---------|-----------|--------------|"
-        
-        awk -F'|' '$4!=999 {
-            count[$2]++
-            latency_sum[$2]+=$4
-        }
-        END {
-            for (provider in count) {
-                printf "| %s | %d | %.3f |\n", 
-                    provider, 
-                    count[provider], 
-                    latency_sum[provider]/count[provider]
-            }
-        }' "${RESULTS_FILE}" | sort -t'|' -k3 -n
-        
-    } > "${LATEST_REPORT}"
-    
-    log "SUCCESS" "报告已生成: ${LATEST_REPORT}"
+        echo -ne "${GREEN}请选择 [0-5]: ${NC}"
+        read -r choice
+
+        case $choice in
+            1)  if [ -f "${BACKGROUND_LOG}" ]; then
+                    log "ERROR" "已有后台任务在运行"
+                else
+                    log "INFO" "启动后台分析任务..."
+                    nohup bash "$0" background > "${BACKGROUND_LOG}" 2>&1 &
+                    local pid=$!
+                    echo $pid > "${TEMP_DIR}/background.pid"
+                    sleep 2
+                    
+                    if kill -0 $pid 2>/dev/null; then
+                        log "SUCCESS" "后台任务已启动，进程ID: $pid"
+                    else
+                        log "ERROR" "后台任务启动失败"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                    fi
+                fi
+                read -rp "按回车键继续..."
+                ;;
+                
+            2)  if [ -f "${BACKGROUND_LOG}" ]; then
+                    echo -e "\n${GREEN}正在监控后台任务 (按 Ctrl+C 退出监控)${NC}"
+                    echo -e "${GREEN}===================${NC}"
+                    
+                    trap 'echo -e "\n${GREEN}已退出监控模式${NC}"; return 0' INT
+                    
+                    tail -f "${BACKGROUND_LOG}" | while read -r line; do
+                        if [[ $line == *"["*"]"* ]] || [[ $line == *"|"* ]] || [[ $line == "====="* ]]; then
+                            echo -e "$line"
+                        fi
+                    done
+                    
+                    trap - INT
+                else
+                    log "WARN" "没有运行中的后台任务"
+                    read -rp "按回车键继续..."
+                fi
+                ;;
+                
+            3)  if [ -f "${TEMP_DIR}/background.pid" ]; then
+                    local pid=$(cat "${TEMP_DIR}/background.pid")
+                    if kill -0 "$pid" 2>/dev/null; then
+                        kill "$pid"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                        log "SUCCESS" "后台任务已停止"
+                    else
+                        log "WARN" "后台任务已不存在"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                    fi
+                else
+                    log "WARN" "没有运行中的后台任务"
+                fi
+                read -rp "按回车键继续..."
+                ;;
+                
+            4)  if [ -f "${TEMP_DIR}/background.pid" ]; then
+                    local pid=$(cat "${TEMP_DIR}/background.pid")
+                    if kill -0 $pid 2>/dev/null; then
+                        log "INFO" "后台任务正在运行 (PID: $pid)"
+                        if [ -f "${PROGRESS_FILE}" ]; then
+                            local progress=$(cat "${PROGRESS_FILE}")
+                            log "INFO" "当前进度: $progress"
+                        fi
+                    else
+                        log "WARN" "后台任务已结束"
+                        rm -f "${TEMP_DIR}/background.pid"
+                    fi
+                else
+                    log "INFO" "没有运行中的后台任务"
+                fi
+                read -rp "按回车键继续..."
+                ;;
+                
+            5)  if [ -f "${LATEST_REPORT}" ]; then
+                    clear
+                    cat "${LATEST_REPORT}"
+                else
+                    log "ERROR" "未找到分析报告"
+                fi
+                read -rp "按回车键继续..."
+                ;;
+                
+            0)  break 
+                ;;
+                
+            *)  log "ERROR" "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 # 主函数
@@ -475,7 +648,7 @@ main() {
     fi
     
     if [ "$cmd" = "background" ]; then
-        analyze_validators_parallel true
+        analyze_validators true
         exit 0
     fi
     
@@ -492,10 +665,53 @@ main() {
     install_solana_cli || exit 1
     load_config
     
-    analyze_validators false
+    while true; do
+        show_menu
+        read -r choice
+        
+        case $choice in
+            1)  analyze_validators false || {
+                    log "ERROR" "分析失败"
+                    read -rp "按回车键继续..."
+                }
+                ;;
+            2)  analyze_validators_parallel false || {
+                    log "ERROR" "并发分析失败"
+                    read -rp "按回车键继续..."
+                }
+                ;;
+            3)  echo -ne "\n${GREEN}请输入要测试的IP地址: ${NC}"
+                read -r test_ip
+                if [[ $test_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    test_single_ip "$test_ip"
+                else
+                    log "ERROR" "无效的IP地址"
+                fi
+                read -rp "按回车键继续..."
+                ;;
+            4)  if [ -f "${LATEST_REPORT}" ]; then
+                    clear
+                    cat "${LATEST_REPORT}"
+                else
+                    log "ERROR" "未找到分析报告"
+                fi
+                read -rp "按回车键继续..."
+                ;;
+            5)  show_background_menu
+                ;;
+            6)  show_config_menu
+                ;;
+            0)  log "INFO" "感谢使用！"
+                exit 0
+                ;;
+            *)  log "ERROR" "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 # 启动程序
 main "$@"
 
-
+    
