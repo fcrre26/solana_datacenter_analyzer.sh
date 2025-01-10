@@ -747,6 +747,113 @@ show_background_menu() {
     done
 }
 
+# 测试单个IP
+test_single_ip() {
+    local ip="$1"
+    
+    echo -e "\n${GREEN}测试 IP: ${CYAN}$ip${NC}"
+    echo -e "${GREEN}===================${NC}"
+    
+    local latency=$(test_network_quality "$ip")
+    local ip_info=$(get_ip_info "$ip")
+    local provider_info=$(identify_provider "$(echo "$ip_info" | jq -r '.org // .isp // "Unknown"')" "$(echo "$ip_info" | jq -r '.city // "Unknown"'), $(echo "$ip_info" | jq -r '.country_name // .country // "Unknown"')")
+    
+    local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
+    local region_code=$(echo "$provider_info" | cut -d'|' -f2)
+    local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
+    
+    # 显示结果
+    if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        if [ "$(echo "$latency > 100" | bc -l)" -eq 1 ]; then
+            echo -e "延迟: ${YELLOW}${latency}ms${NC}"
+        else
+            echo -e "延迟: ${GREEN}${latency}ms${NC}"
+        fi
+    else
+        echo -e "延迟: ${RED}超时${NC}"
+    fi
+    
+    echo -e "供应商: ${WHITE}${cloud_provider}${NC}"
+    echo -e "数据中心: ${WHITE}${datacenter}${NC}"
+    echo -e "区域代码: ${WHITE}${region_code}${NC}"
+    echo -e "${GREEN}===================${NC}"
+}
+
+# 配置菜单
+show_config_menu() {
+    while true; do
+        clear
+        echo -e "${GREEN}配置设置${NC}"
+        echo "==================="
+        echo -e "1. 修改并发数 (当前: ${MAX_CONCURRENT_JOBS:-10})"
+        echo -e "2. 修改超时时间 (当前: ${TIMEOUT_SECONDS:-2}秒)"
+        echo -e "3. 修改重试次数 (当前: ${RETRIES:-2}次)"
+        echo -e "4. 修改测试端口 (当前: ${TEST_PORTS[*]:-8899 8900 8001 8000})"
+        echo -e "5. 重置为默认配置"
+        echo -e "0. 返回主菜单"
+        echo
+        echo -ne "请选择 [0-5]: "
+        read -r choice
+
+        case $choice in
+            1)  echo -ne "请输入新的并发数 [1-50]: "
+                read -r new_jobs
+                if [[ "$new_jobs" =~ ^[1-9][0-9]?$ ]] && [ "$new_jobs" -le 50 ]; then
+                    sed -i "s/MAX_CONCURRENT_JOBS=.*/MAX_CONCURRENT_JOBS=$new_jobs/" "$CONFIG_FILE"
+                    log "SUCCESS" "并发数已更新为: $new_jobs"
+                else
+                    log "ERROR" "无效的并发数"
+                fi
+                ;;
+                
+            2)  echo -ne "请输入新的超时时间 (秒) [1-10]: "
+                read -r new_timeout
+                if [[ "$new_timeout" =~ ^[1-9][0]?$ ]]; then
+                    sed -i "s/TIMEOUT_SECONDS=.*/TIMEOUT_SECONDS=$new_timeout/" "$CONFIG_FILE"
+                    log "SUCCESS" "超时时间已更新为: ${new_timeout}秒"
+                else
+                    log "ERROR" "无效的超时时间"
+                fi
+                ;;
+                
+            3)  echo -ne "请输入新的重试次数 [1-5]: "
+                read -r new_retries
+                if [[ "$new_retries" =~ ^[1-5]$ ]]; then
+                    sed -i "s/RETRIES=.*/RETRIES=$new_retries/" "$CONFIG_FILE"
+                    log "SUCCESS" "重试次数已更新为: $new_retries"
+                else
+                    log "ERROR" "无效的重试次数"
+                fi
+                ;;
+                
+            4)  echo -ne "请输入测试端口 (空格分隔): "
+                read -r new_ports
+                if [[ "$new_ports" =~ ^[0-9\ ]+$ ]]; then
+                    sed -i "s/TEST_PORTS=.*/TEST_PORTS=(${new_ports})/" "$CONFIG_FILE"
+                    log "SUCCESS" "测试端口已更新为: $new_ports"
+                else
+                    log "ERROR" "无效的端口格式"
+                fi
+                ;;
+                
+            5)  create_default_config
+                log "SUCCESS" "配置已重置为默认值"
+                ;;
+                
+            0)  break ;;
+            
+            *)  log "ERROR" "无效选择"
+                ;;
+        esac
+        read -rp "按回车键继续..."
+    done
+    
+    # 重新加载配置
+    load_config
+}
+
+
+
 # 主函数
 main() {
     local cmd="${1:-}"
