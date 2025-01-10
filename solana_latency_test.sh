@@ -429,10 +429,12 @@ update_progress() {
     esac
     
     # 打印总进度（在顶部）
-    printf "\n${GREEN}[%s] %3d%% | 已测试: %d/%d | 预计剩余: %dm%ds${NC}\n" \
-        "$(printf '█%.0s' $(seq 1 $((progress * 40 / 100))))$(printf '░%.0s' $(seq 1 $((40 - progress * 40 / 100))))" \
-        "$progress" "$current" "$total" \
-        $((eta / 60)) $((eta % 60))
+printf "\n[" 
+printf "${GREEN}█%.0s${NC}" $(seq 1 $((progress * 40 / 100)))
+printf "${WHITE}░%.0s${NC}" $(seq 1 $((40 - progress * 40 / 100)))
+printf "] ${GREEN}%3d%%${NC} | 已测试: ${GREEN}%d${NC}/${WHITE}%d${NC} | 预计剩余: ${WHITE}%dm%ds${NC}\n" \
+    "$progress" "$current" "$total" \
+    $((eta / 60)) $((eta % 60))
     
     # 格式化显示表头
     printf "%-10s | %-15s | %-8s | %-15s | %-30s | %-15s\n" \
