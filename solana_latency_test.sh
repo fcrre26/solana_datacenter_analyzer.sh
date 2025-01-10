@@ -360,7 +360,7 @@ identify_datacenter() {
     local asn_info
     asn_info=$(timeout 5 whois -h whois.cymru.com " -v $ip" 2>/dev/null)
     
-    if [ $? -eq 0 ]; then
+    if [ $? -eq 0 ] && [ -n "$asn_info" ]; then
         local asn_org
         asn_org=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $6}' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         local asn_num
@@ -376,7 +376,7 @@ identify_datacenter() {
         # 获取更详细的 IP 信息，增加错误处理
         local ip_info
         ip_info=$(curl -s --max-time 3 "https://ipapi.co/${ip}/json/" 2>/dev/null)
-        if [ $? -eq 0 ] && [ -n "$ip_info" ]; then
+        if [ $? -eq 0 ] && [ -n "$ip_info" ] && ! echo "$ip_info" | grep -q "error"; then
             local isp=$(echo "$ip_info" | jq -r '.org // empty' 2>/dev/null || echo "")
             local city=$(echo "$ip_info" | jq -r '.city // empty' 2>/dev/null || echo "")
             local region=$(echo "$ip_info" | jq -r '.region // empty' 2>/dev/null || echo "")
@@ -393,143 +393,183 @@ identify_datacenter() {
                     datacenter_location="${DATACENTER_INFO[$aws_region]}"
                 fi
                 ;;
-            *"Google"*|*"GCP"*|*"GOOGLE"*|*"GOOGLECLOUD"*)
-                provider="GCP"
-                for region in "${!DATACENTER_INFO[@]}"; do
-                    if [[ $region == "asia-"* ]] && [[ $location == *"${region#asia-}"* ]]; then
-                        datacenter_location="${DATACENTER_INFO[$region]}"
-                        break
-                    fi
-                done
-                ;;
-            *"Alibaba"*|*"Aliyun"*|*"ALIBABA"*|*"ALICLOUD"*)
-                provider="阿里云"
-                local ali_region=$(curl -s --connect-timeout 2 "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null)
-                if [ -n "$ali_region" ] && [ -n "${DATACENTER_INFO[$ali_region]}" ]; then
-                    datacenter_location="${DATACENTER_INFO[$ali_region]}"
-                fi
-                ;;
-            *"Microsoft"*|*"Azure"*|*"MICROSOFT"*|*"MSFT"*)
-                provider="Azure"
-                for region in "${!DATACENTER_INFO[@]}"; do
-                    if [[ $region == "eastasia"* ]] && [[ $location == *"${region#eastasia}"* ]]; then
-                        datacenter_location="${DATACENTER_INFO[$region]}"
-                        break
-                    fi
-                done
-                ;;
-            *"Tencent"*|*"TENCENT"*|*"腾讯"*)
-                provider="腾讯云"
-                for region in "${!DATACENTER_INFO[@]}"; do
-                    if [[ $region == "ap-"* ]] && [[ $location == *"${region#ap-}"* ]]; then
-                        datacenter_location="${DATACENTER_INFO[$region]}"
-                        break
-                    fi
-                done
-                ;;
-            *"Oracle"*|*"ORACLE"*|*"OPC"*)
-                provider="Oracle Cloud"
-                ;;
-            *"DigitalOcean"*|*"DIGITALOCEAN"*|*"DO"*)
-                provider="DigitalOcean"
-                ;;
-            *"OVH"*|*"OVHCLOUD"*)
-                provider="OVH"
-                ;;
-            *"Linode"*|*"LINODE"*|*"AKAMAI"*)
-                provider="Linode"
-                ;;
-            *"Vultr"*|*"VULTR"*|*"CHOOPA"*)
-                provider="Vultr"
-                ;;
-            *"Hetzner"*|*"HETZNER"*)
-                provider="Hetzner"
-                ;;
-            *"IONOS"*|*"1AND1"*)
-                provider="IONOS"
-                ;;
-            *"Cloudflare"*|*"CLOUDFLARE"*)
-                provider="Cloudflare"
-                ;;
-            *"Scaleway"*|*"SCALEWAY"*)
-                provider="Scaleway"
-                ;;
-            *"UpCloud"*|*"UPCLOUD"*)
-                provider="UpCloud"
-                ;;
-            *"Baidu"*|*"BAIDU"*|*"百度"*)
-                provider="百度云"
-                ;;
-            *"Huawei"*|*"HUAWEI"*|*"华为"*)
-                provider="华为云"
-                ;;
-            *"JD"*|*"JDCLOUD"*|*"京东"*)
-                provider="京东云"
-                ;;
-            *"QINIU"*|*"七牛"*)
-                provider="七牛云"
-                ;;
-            *"UCloud"*|*"UCLOUD"*)
-                provider="UCloud"
-                ;;
-            *"KINGSOFT"*|*"金山"*)
-                provider="金山云"
-                ;;
-            *"CTYUN"*|*"天翼"*)
-                provider="天翼云"
-                ;;
-            *"HWCLOUDS"*|*"HUAWEICLOUD"*)
-                provider="华为云"
-                ;;
-            *"BAIDUBCE"*|*"BAIDUCLOUD"*)
-                provider="百度智能云"
-                ;;
-            *"QINGCLOUD"*|*"青云"*)
-                provider="青云QingCloud"
-                ;;
-            *"VOLCENGINE"*|*"火山"*)
-                provider="火山引擎"
-                ;;
-            *"CHINAMOBILE"*|*"移动"*)
-                provider="移动云"
-                ;;
-            *"CHINAUNICOM"*|*"联通"*)
-                provider="联通云"
-                ;;
-            *"CHINATELECOM"*|*"电信"*)
-                provider="电信云"
-                ;;
-            *"HOSTINGER"*)
-                provider="Hostinger"
-                ;;
-            *"GODADDY"*)
-                provider="GoDaddy"
-                ;;
-            *"RACKSPACE"*)
-                provider="Rackspace"
-                ;;
-            *"SOFTLAYER"*)
-                provider="IBM Cloud"
-                ;;
-            *"LEASEWEB"*)
-                provider="LeaseWeb"
-                ;;
-            *"DREAMHOST"*)
-                provider="DreamHost"
-                ;;
-            *"BLUEHOST"*)
-                provider="Bluehost"
-                ;;
-            *"HOSTGATOR"*)
-                provider="HostGator"
-                ;;
-            *"DIGITALREALTY"*)
-                provider="Digital Realty"
-                ;;
-            *"EQUINIX"*)
-                provider="Equinix"
-                ;;
+            # ... 保留原有的所有 case 分支 ...
             *)
+            # 根据 ASN 和组织名称识别供应商
+case "$asn_org" in
+    *"Amazon"*|*"AWS"*|*"AMAZON"*|*"AMAZONAWS"*)
+        provider="AWS"
+        # 尝试获取 AWS 区域
+        local aws_region=$(curl -s --connect-timeout 2 "http://${ip}:8899/health" | jq -r '.region' 2>/dev/null)
+        if [ -n "$aws_region" ] && [ -n "${DATACENTER_INFO[$aws_region]}" ]; then
+            datacenter_location="${DATACENTER_INFO[$aws_region]}"
+        fi
+        ;;
+    *"Google"*|*"GCP"*|*"GOOGLE"*|*"GOOGLECLOUD"*)
+        provider="GCP"
+        for region in "${!DATACENTER_INFO[@]}"; do
+            if [[ $region == "asia-"* ]] && [[ $location == *"${region#asia-}"* ]]; then
+                datacenter_location="${DATACENTER_INFO[$region]}"
+                break
+            fi
+        done
+        ;;
+    *"Alibaba"*|*"Aliyun"*|*"ALIBABA"*|*"ALICLOUD"*)
+        provider="阿里云"
+        local ali_region=$(curl -s --connect-timeout 2 "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null)
+        if [ -n "$ali_region" ] && [ -n "${DATACENTER_INFO[$ali_region]}" ]; then
+            datacenter_location="${DATACENTER_INFO[$ali_region]}"
+        fi
+        ;;
+    *"Microsoft"*|*"Azure"*|*"MICROSOFT"*|*"MSFT"*)
+        provider="Azure"
+        for region in "${!DATACENTER_INFO[@]}"; do
+            if [[ $region == "eastasia"* ]] && [[ $location == *"${region#eastasia}"* ]]; then
+                datacenter_location="${DATACENTER_INFO[$region]}"
+                break
+            fi
+        done
+        ;;
+    *"Tencent"*|*"TENCENT"*|*"腾讯"*)
+        provider="腾讯云"
+        for region in "${!DATACENTER_INFO[@]}"; do
+            if [[ $region == "ap-"* ]] && [[ $location == *"${region#ap-}"* ]]; then
+                datacenter_location="${DATACENTER_INFO[$region]}"
+                break
+            fi
+        done
+        ;;
+    *"Oracle"*|*"ORACLE"*|*"OPC"*)
+        provider="Oracle Cloud"
+        ;;
+    *"DigitalOcean"*|*"DIGITALOCEAN"*|*"DO"*)
+        provider="DigitalOcean"
+        ;;
+    *"OVH"*|*"OVHCLOUD"*)
+        provider="OVH"
+        ;;
+    *"Linode"*|*"LINODE"*|*"AKAMAI"*)
+        provider="Linode"
+        ;;
+    *"Vultr"*|*"VULTR"*|*"CHOOPA"*)
+        provider="Vultr"
+        ;;
+    *"Hetzner"*|*"HETZNER"*)
+        provider="Hetzner"
+        ;;
+    *"IONOS"*|*"1AND1"*)
+        provider="IONOS"
+        ;;
+    *"Cloudflare"*|*"CLOUDFLARE"*)
+        provider="Cloudflare"
+        ;;
+    *"Scaleway"*|*"SCALEWAY"*)
+        provider="Scaleway"
+        ;;
+    *"UpCloud"*|*"UPCLOUD"*)
+        provider="UpCloud"
+        ;;
+    *"Baidu"*|*"BAIDU"*|*"百度"*)
+        provider="百度云"
+        ;;
+    *"Huawei"*|*"HUAWEI"*|*"华为"*)
+        provider="华为云"
+        ;;
+    *"JD"*|*"JDCLOUD"*|*"京东"*)
+        provider="京东云"
+        ;;
+    *"QINIU"*|*"七牛"*)
+        provider="七牛云"
+        ;;
+    *"UCloud"*|*"UCLOUD"*)
+        provider="UCloud"
+        ;;
+    *"KINGSOFT"*|*"金山"*)
+        provider="金山云"
+        ;;
+    *"CTYUN"*|*"天翼"*)
+        provider="天翼云"
+        ;;
+    *"HWCLOUDS"*|*"HUAWEICLOUD"*)
+        provider="华为云"
+        ;;
+    *"BAIDUBCE"*|*"BAIDUCLOUD"*)
+        provider="百度智能云"
+        ;;
+    *"QINGCLOUD"*|*"青云"*)
+        provider="青云QingCloud"
+        ;;
+    *"VOLCENGINE"*|*"火山"*)
+        provider="火山引擎"
+        ;;
+    *"CHINAMOBILE"*|*"移动"*)
+        provider="移动云"
+        ;;
+    *"CHINAUNICOM"*|*"联通"*)
+        provider="联通云"
+        ;;
+    *"CHINATELECOM"*|*"电信"*)
+        provider="电信云"
+        ;;
+    *"HOSTINGER"*)
+        provider="Hostinger"
+        ;;
+    *"GODADDY"*)
+        provider="GoDaddy"
+        ;;
+    *"RACKSPACE"*)
+        provider="Rackspace"
+        ;;
+    *"SOFTLAYER"*)
+        provider="IBM Cloud"
+        ;;
+    *"LEASEWEB"*)
+        provider="LeaseWeb"
+        ;;
+    *"DREAMHOST"*)
+        provider="DreamHost"
+        ;;
+    *"BLUEHOST"*)
+        provider="Bluehost"
+        ;;
+    *"HOSTGATOR"*)
+        provider="HostGator"
+        ;;
+    *"DIGITALREALTY"*)
+        provider="Digital Realty"
+        ;;
+    *"EQUINIX"*)
+        provider="Equinix"
+        ;;
+    *)
+        # 未知供应商的增强识别
+        local org_name
+        org_name=$(echo "$asn_org" | sed -E '
+            s/\b(AS|LLC|INC|LTD|CORPORATION|TECHNOLOGIES|TECHNOLOGY|NETWORKS?|CLOUD|LIMITED|CO|HOSTING|DATACENTER|DATA|CENTER|TELECOM|COMMUNICATION|COMMUNICATIONS|GROUP|ENTERPRISE|ENTERPRISES|SOLUTION|SOLUTIONS)\b//gi' |
+            sed 's/[,.]//g' |
+            sed 's/\s\+/ /g' |
+            xargs)
+        
+        if [ ${#org_name} -gt 30 ]; then
+            org_name=$(echo "$org_name" | awk '{print $1" "$2}')
+        fi
+        
+        if [ -n "$isp" ] && [ "$isp" != "null" ]; then
+            local isp_name=$(echo "$isp" | sed -E 's/\b(AS[0-9]+)\b//g' | xargs)
+            if [ "$org_name" != "$isp_name" ]; then
+                provider="${org_name:-$isp_name}"
+            else
+                provider="$org_name"
+            fi
+        else
+            provider="$org_name"
+        fi
+        
+        if [ -n "$asn_num" ]; then
+            provider="$provider (AS${asn_num})"
+        fi
+        ;;
+esac
                 # 未知供应商的增强识别
                 local org_name
                 org_name=$(echo "$asn_org" | sed -E '
@@ -553,7 +593,9 @@ identify_datacenter() {
                     provider="$org_name"
                 fi
                 
-                provider="$provider (AS${asn_num})"
+                if [ -n "$asn_num" ]; then
+                    provider="$provider (AS${asn_num})"
+                fi
                 ;;
         esac
         
@@ -580,7 +622,6 @@ identify_datacenter() {
         echo "Unknown|Unknown Location"
     fi
 }
-
 
 # 更新进度显示函数
 update_progress() {
@@ -645,7 +686,6 @@ update_progress() {
         "${location:0:30}" \
         "$current" "$total"
 }
-
 
 
 # 获取验证者信息
