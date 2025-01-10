@@ -473,6 +473,59 @@ get_validators() {
     return 0
 }
 
+# 在 analyze_validators_parallel 函数之前添加
+# 单线程分析验证者节点
+analyze_validators() {
+    local background="${1:-false}"
+    BACKGROUND_MODE="$background"
+    
+    log "INFO" "开始分析验证者节点分布"
+    
+    local validator_ips
+    validator_ips=$(get_validators) || {
+        log "ERROR" "获取验证者信息失败"
+        return 1
+    }
+    
+    : > "${RESULTS_FILE}"
+    echo "$validator_ips" > "${TEMP_DIR}/tmp_ips.txt"
+    
+    local total=$(wc -l < "${TEMP_DIR}/tmp_ips.txt")
+    local current=0
+    
+    # 记录开始时间
+    START_TIME=$(date +%s)
+    
+    log "INFO" "找到 ${total} 个验证者节点"
+    echo "----------------------------------------"
+    
+    while read -r ip; do
+        ((current++))
+        
+        # 测试网络延迟
+        local latency=$(test_network_quality "$ip")
+        
+        # 获取数据中心信息
+        local dc_info=$(identify_datacenter "$ip")
+        local provider=$(echo "$dc_info" | cut -d'|' -f1)
+        local location=$(echo "$dc_info" | cut -d'|' -f2)
+        
+        update_progress "$current" "$total" "$ip" "$latency" "$location" "$provider"
+        
+        echo "$ip|$provider|$location|$latency" >> "${RESULTS_FILE}"
+        
+    done < "${TEMP_DIR}/tmp_ips.txt"
+    
+    echo "----------------------------------------"
+    generate_report
+    
+    if [ "$background" = "true" ]; then
+        log "SUCCESS" "后台分析完成！报告已生成: ${LATEST_REPORT}"
+    else
+        log "SUCCESS" "分析完成！报告已生成: ${LATEST_REPORT}"
+    fi
+}
+
 # 并发分析验证者节点
 analyze_validators_parallel() {
     local background="${1:-false}"
