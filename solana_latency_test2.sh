@@ -932,65 +932,11 @@ update_progress() {
 }
 
 # 生成报告
+# 在 generate_report 函数中修改统计部分
 generate_report() {
     log "INFO" "正在生成最终报告..."
     
     local temp_report="${TEMP_DIR}/temp_report.txt"
-    
-    # 基础统计数据计算
-    local total_nodes=$(wc -l < "${RESULTS_FILE}")
-    local valid_nodes=$(awk -F'|' '$4!=999 { count++ } END { print count }' "${RESULTS_FILE}")
-    local avg_latency=$(awk -F'|' '$4!=999 { sum+=$4; count++ } END { if(count>0) printf "%.3f", sum/count }' "${RESULTS_FILE}")
-    
-    # 获取最大供应商及其节点数
-    local max_provider_info=$(awk -F'|' '{
-        provider=$2
-        count[provider]++
-    } 
-    END {
-        max_count = 0
-        max_provider = ""
-        for (p in count) {
-            if (count[p] > max_count) {
-                max_count = count[p]
-                max_provider = p
-            }
-        }
-        printf "%s|%d", max_provider, max_count
-    }' "${RESULTS_FILE}")
-    
-    local max_provider=$(echo "$max_provider_info" | cut -d'|' -f1)
-    local max_provider_count=$(echo "$max_provider_info" | cut -d'|' -f2)
-    
-    # 获取该供应商最多的机房及其节点数
-    local max_dc_info=$(awk -F'|' -v provider="$max_provider" '{
-        if ($2 == provider) {
-            dc=$3
-            count[dc]++
-            regions[dc]=$5
-            latencies[dc]+=$4
-            if ($4 != "999") valid[dc]++
-        }
-    } 
-    END {
-        max_count = 0
-        max_dc = ""
-        max_region = ""
-        for (dc in count) {
-            if (count[dc] > max_count) {
-                max_count = count[dc]
-                max_dc = dc
-                max_region = regions[dc]
-            }
-        }
-        avg_latency = (valid[max_dc] > 0) ? latencies[max_dc]/valid[max_dc] : 999
-        printf "%s|%d|%s|%.2f", max_dc, max_count, max_region, avg_latency
-    }' "${RESULTS_FILE}")
-    
-    local max_dc=$(echo "$max_dc_info" | cut -d'|' -f1)
-    local max_dc_count=$(echo "$max_dc_info" | cut -d'|' -f2)
-    local max_dc_region=$(echo "$max_dc_info" | cut -d'|' -f3)
-    local max_dc_latency=$(echo "$max_dc_info" | cut -d'|' -f4)
     
     {
         echo -e "${CYAN}================================================================${NC}"
@@ -1000,119 +946,194 @@ generate_report() {
         # 1. 供应商分布统计
         echo -e "${WHITE}【供应商分布统计】${NC}"
         echo -e "${CYAN}----------------------------------------------------------------${NC}"
-        echo -e "主导供应商: ${GREEN}${max_provider}${NC}"
-        echo -e "节点数量: ${GREEN}${max_provider_count}${NC} (占比: ${GREEN}$(printf "%.1f" $((max_provider_count * 100 / total_nodes)))%${NC})"
-        echo -e "\n供应商排名 (Top 10):"
+        
+        # 获取主导供应商信息
+        local provider_info=$(awk -F'|' '
+        $2 !~ /Unknown/ {
+            provider=$2
+            count[provider]++
+            total++
+        }
+        END {
+            max_count = 0
+            max_provider = ""
+            for (p in count) {
+                if (count[p] > max_count) {
+                    max_count = count[p]
+                    max_provider = p
+                }
+            }
+            printf "%s|%d|%.1f", max_provider, max_count, (max_count/total)*100
+        }' "${RESULTS_FILE}")
+        
+        local main_provider=$(echo "$provider_info" | cut -d'|' -f1)
+        local main_count=$(echo "$provider_info" | cut -d'|' -f2)
+        local main_percent=$(echo "$provider_info" | cut -d'|' -f3)
+        
+        echo -e "主导供应商: ${GREEN}${main_provider}${NC}"
+        echo -e "节点数量: ${GREEN}${main_count}${NC} (占比: ${GREEN}${main_percent}%${NC})\n"
+        
+        # 供应商排名 (Top 20)
+        echo -e "供应商排名 (Top 20):"
         echo -e "${CYAN}----------------------------------------------------------------${NC}"
         printf "%-25s %-10s %-15s %-15s %-12s\n" "供应商" "节点数" "占比" "平均延迟" "可用率"
         echo -e "${CYAN}----------------------------------------------------------------${NC}"
         
-        awk -F'|' 'BEGIN {OFS="|"}
-        {
+        awk -F'|' '
+        $2 !~ /Unknown/ {
             provider=$2
             latency=$4
-            total[provider]++
+            count[provider]++
+            total++
             if (latency != "999") {
                 valid[provider]++
                 sum[provider]+=latency
             }
         }
         END {
-            for (p in total) {
+            for (p in count) {
                 if (valid[p] > 0) {
-                    printf "%-25s %-10d %-15.1f%% %-15.2f %-12.1f%%\n",
+                    printf "%-25s %-10d %-15.1f%% %-15.2fms %-12.1f%%\n",
                         substr(p,1,25),
-                        total[p],
-                        total[p]*100/NR,
+                        count[p],
+                        count[p]*100/total,
                         sum[p]/valid[p],
-                        valid[p]*100/total[p]
+                        valid[p]*100/count[p]
                 }
             }
-        }' "${RESULTS_FILE}" | sort -t' ' -k2 -nr | head -10
+        }' "${RESULTS_FILE}" | sort -k2 -nr | head -20
         
         # 2. 机房分布统计
         echo -e "\n${WHITE}【机房分布统计】${NC}"
         echo -e "${CYAN}----------------------------------------------------------------${NC}"
-        echo -e "主要机房: ${GREEN}${max_dc}${NC}"
-        echo -e "所属供应商: ${GREEN}${max_provider}${NC}"
-        echo -e "区域: ${GREEN}${max_dc_region}${NC}"
-        echo -e "节点数量: ${GREEN}${max_dc_count}${NC} (占比: ${GREEN}$(printf "%.1f" $((max_dc_count * 100 / max_provider_count)))%${NC})"
-        echo -e "平均延迟: ${GREEN}${max_dc_latency}ms${NC}"
-        
-        echo -e "\n机房排名 (Top 10):"
-        echo -e "${CYAN}----------------------------------------------------------------${NC}"
-        printf "%-30s %-10s %-15s %-15s %-12s\n" "机房位置" "节点数" "占比" "平均延迟" "区域"
+        echo -e "主要机房分布 (Top 20):\n"
+        printf "%-30s %-15s %-10s %-15s\n" "机房" "供应商" "节点数" "占比"
         echo -e "${CYAN}----------------------------------------------------------------${NC}"
         
-        awk -F'|' 'BEGIN {OFS="|"}
-        {
+        awk -F'|' '
+        $2 !~ /Unknown/ && $3 !~ /Unknown/ {
             dc=$3
             provider=$2
-            latency=$4
-            region=$5
-            total[dc]++
-            regions[dc]=region
-            providers[dc]=provider
-            if (latency != "999") {
-                valid[dc]++
-                sum[dc]+=latency
-            }
-        }
-        END {
-            for (d in total) {
-                if (valid[d] > 0) {
-                    printf "%-30s %-10d %-15.1f%% %-15.2f %-12s\n",
-                        substr(d,1,30),
-                        total[d],
-                        total[d]*100/NR,
-                        sum[d]/valid[d],
-                        regions[d]
-                }
-            }
-        }' "${RESULTS_FILE}" | sort -t' ' -k2 -nr | head -10
-        
-        # 3. 部署建议
-        echo -e "\n${WHITE}【最优部署建议】${NC}"
-        echo -e "${CYAN}----------------------------------------------------------------${NC}"
-        echo -e "${GREEN}1. 推荐部署方案：${NC}"
-        echo -e "   主要部署点："
-        echo -e "   - 供应商: ${GREEN}${max_provider}${NC}"
-        echo -e "   - 机房: ${GREEN}${max_dc}${NC}"
-        echo -e "   - 区域: ${GREEN}${max_dc_region}${NC}"
-        echo -e "   - 平均延迟: ${GREEN}${max_dc_latency}ms${NC}"
-        
-        # 获取备选部署点（不同供应商的低延迟节点）
-        echo -e "\n   备选部署点："
-        awk -F'|' -v main_provider="$max_provider" '$2!=main_provider && $4!=999 {
-            dc=$3
-            provider=$2
-            latency=$4
-            region=$5
             count[dc]++
             providers[dc]=provider
-            regions[dc]=region
-            if (latency < min[dc] || min[dc] == "") min[dc]=latency
-            sum[dc]+=latency
+            total++
         }
         END {
             for (d in count) {
-                if (count[d] >= 3 && sum[d]/count[d] < 100) {
-                    printf "   - %s\n     供应商: %s\n     区域: %s\n     平均延迟: %.2fms\n     节点数: %d\n\n",
-                        d,
-                        providers[d],
-                        regions[d],
-                        sum[d]/count[d],
-                        count[d]
+                printf "%-30s %-15s %-10d %-15.1f%%\n",
+                    substr(d,1,30),
+                    providers[d],
+                    count[d],
+                    count[d]*100/total
+            }
+        }' "${RESULTS_FILE}" | sort -k3 -nr | head -20
+        
+        # 3. 地区分布统计
+        echo -e "\n主要地区分布 (Top 20):\n"
+        printf "%-20s %-10s %-15s\n" "地区" "节点数" "占比"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
+        
+        awk -F'|' '
+        $2 !~ /Unknown/ && $5 !~ /Unknown/ {
+            region=$5
+            count[region]++
+            total++
+        }
+        END {
+            for (r in count) {
+                printf "%-20s %-10d %-15.1f%%\n",
+                    substr(r,1,20),
+                    count[r],
+                    count[r]*100/total
+            }
+        }' "${RESULTS_FILE}" | sort -k2 -nr | head -20
+        
+        # 4. 部署建议
+        echo -e "\n${WHITE}【最优部署建议】${NC}"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
+        
+        # 获取最优部署选项（排除 Unknown）
+        awk -F'|' '
+        function print_recommendation(dc, provider, region, count, latency, total) {
+            printf "推荐部署方案：\n"
+            printf "  - 机房: %s\n", dc
+            printf "  - 供应商: %s\n", provider
+            printf "  - 地区: %s\n", region
+            printf "  - 节点数量: %d (占比: %.1f%%)\n", count, count*100/total
+            printf "  - 平均延迟: %.2fms\n", latency
+        }
+        
+        $2 !~ /Unknown/ && $3 !~ /Unknown/ && $5 !~ /Unknown/ {
+            dc=$3
+            provider=$2
+            region=$5
+            latency=$4
+            count[dc]++
+            providers[dc]=provider
+            regions[dc]=region
+            if (latency != "999") {
+                latencies[dc]+=latency
+                valid[dc]++
+            }
+            total++
+        }
+        
+        END {
+            max_count=0
+            best_dc=""
+            
+            for (dc in count) {
+                if (count[dc] > max_count && valid[dc] > 0) {
+                    max_count = count[dc]
+                    best_dc = dc
                 }
             }
-        }' "${RESULTS_FILE}" | sort -t':' -k2 -n | head -3
+            
+            if (best_dc != "") {
+                avg_latency = latencies[best_dc]/valid[best_dc]
+                print_recommendation(
+                    best_dc,
+                    providers[best_dc],
+                    regions[best_dc],
+                    count[best_dc],
+                    avg_latency,
+                    total
+                )
+            }
+        }' "${RESULTS_FILE}"
         
-        echo -e "${YELLOW}2. 部署策略建议：${NC}"
-        echo "   - 主要节点部署在 ${max_provider} 的 ${max_dc}"
-        echo "   - 建议选择2-3个备选机房作为容灾节点"
-        echo "   - 优先选择节点数量多、延迟低的机房"
-        echo "   - 建议跨供应商部署以提高可用性"
-        echo "   - 定期进行延迟测试和性能监控"
+        # 备选方案
+        echo -e "\n备选部署方案：\n"
+        printf "%-30s %-15s %-10s %-15s\n" "机房" "供应商" "节点数" "平均延迟"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
+        
+        awk -F'|' '
+        $2 !~ /Unknown/ && $3 !~ /Unknown/ && $4 != "999" {
+            dc=$3
+            provider=$2
+            count[dc]++
+            providers[dc]=provider
+            latencies[dc]+=$4
+        }
+        END {
+            for (dc in count) {
+                if (count[dc] >= 3) {
+                    printf "%-30s %-15s %-10d %-15.2fms\n",
+                        substr(dc,1,30),
+                        providers[dc],
+                        count[dc],
+                        latencies[dc]/count[dc]
+                }
+            }
+        }' "${RESULTS_FILE}" | sort -k4 -n | head -3
+        
+        # 部署策略建议
+        echo -e "\n${YELLOW}部署策略建议：${NC}"
+        echo "1. 选择节点数量较多的机房，这表明该位置已经过其他验证者验证"
+        echo "2. 优先考虑平均延迟较低的机房"
+        echo "3. 建议选择2-3个不同供应商的机房作为备选，提高可用性"
+        echo "4. 定期进行延迟测试和性能监控"
+        echo "5. 考虑成本因素，不同地区和供应商的价格差异较大"
         
     } | tee "$temp_report"
     
