@@ -8,11 +8,11 @@ export PATH="$SOLANA_INSTALL_DIR/active_release/bin:$PATH"
 set -eo pipefail
 
 # 颜色定义
-GREEN='\033[0;32m'      # 绿色
-RED='\033[0;31m'        # 红色
-YELLOW='\033[1;33m'     # 黄色
-CYAN='\033[0;36m'       # 青色
-WHITE='\033[1;37m'      # 亮白色
+GREEN='\033[1;32m'      # 绿色加粗
+RED='\033[1;31m'        # 红色加粗
+YELLOW='\033[1;33m'     # 黄色加粗
+CYAN='\033[1;36m'       # 青色加粗
+WHITE='\033[1;37m'      # 亮白色加粗
 NC='\033[0m'            # 重置颜色
 
 # 标识符定义
@@ -35,8 +35,59 @@ VERSION="v1.3.0"
 # 创建必要的目录
 mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
 
+# IP 地理位置查询函数
+get_ip_location() {
+    local ip="$1"
+    local location=""
+    
+    # 方法1: 使用 ipinfo.io API
+    location=$(curl -s "https://ipinfo.io/${ip}/json" | jq -r '.city + ", " + .region + ", " + .country' 2>/dev/null)
+    
+    # 如果 ipinfo.io 失败，尝试方法2: 使用 ip-api.com
+    if [ -z "$location" ] || [ "$location" = "null, null, null" ]; then
+        location=$(curl -s "http://ip-api.com/json/${ip}" | jq -r '.city + ", " + .regionName + ", " + .country' 2>/dev/null)
+    fi
+    
+    # 如果还是失败，尝试方法3: 使用 GeoIP 数据库
+    if [ -z "$location" ] || [ "$location" = "null, null, null" ]; then
+        if command -v geoiplookup >/dev/null 2>&1; then
+            location=$(geoiplookup "$ip" | grep "GeoIP City" | cut -d':' -f2- | xargs)
+        fi
+    fi
+    
+    echo "${location:-Unknown}"
+}
+
 # 位置翻译字典
 declare -A LOCATION_TRANS=(
+    # AWS 机房
+    ["ap-southeast-1"]="AWS新加坡机房"
+    ["ap-northeast-1"]="AWS东京机房"
+    ["ap-east-1"]="AWS香港机房"
+    ["ap-south-1"]="AWS孟买机房"
+    ["eu-central-1"]="AWS法兰克福机房"
+    ["eu-west-2"]="AWS伦敦机房"
+    ["us-east-1"]="AWS弗吉尼亚机房"
+    ["us-west-1"]="AWS加利福尼亚机房"
+    
+    # Google Cloud 机房
+    ["asia-east2"]="GCP香港机房"
+    ["asia-northeast1"]="GCP东京机房"
+    ["asia-southeast1"]="GCP新加坡机房"
+    ["europe-west3"]="GCP法兰克福机房"
+    ["us-central1"]="GCP爱荷华机房"
+    
+    # Alibaba Cloud 机房
+    ["cn-hongkong"]="阿里云香港机房"
+    ["ap-southeast-1"]="阿里云新加坡机房"
+    ["ap-northeast-1"]="阿里云东京机房"
+    
+    # Azure 机房
+    ["eastasia"]="Azure香港机房"
+    ["southeastasia"]="Azure新加坡机房"
+    ["japaneast"]="Azure东京机房"
+    
+    # 城市和国家
     ["Singapore"]="新加坡"
     ["Tokyo"]="东京"
     ["Seoul"]="首尔"
@@ -52,6 +103,37 @@ declare -A LOCATION_TRANS=(
     ["Mumbai"]="孟买"
     ["Bangalore"]="班加罗尔"
     ["Berlin"]="柏林"
+    ["Los Angeles"]="洛杉矶"
+    ["Chicago"]="芝加哥"
+    ["Dallas"]="达拉斯"
+    ["Miami"]="迈阿密"
+    ["Seattle"]="西雅图"
+    ["Vancouver"]="温哥华"
+    ["Montreal"]="蒙特利尔"
+    ["Sao Paulo"]="圣保罗"
+    ["Melbourne"]="墨尔本"
+    ["Perth"]="珀斯"
+    ["Auckland"]="奥克兰"
+    ["Jakarta"]="雅加达"
+    ["Kuala Lumpur"]="吉隆坡"
+    ["Bangkok"]="曼谷"
+    ["Manila"]="马尼拉"
+    ["Taipei"]="台北"
+    ["Chennai"]="金奈"
+    ["Delhi"]="德里"
+    ["Moscow"]="莫斯科"
+    ["Stockholm"]="斯德哥尔摩"
+    ["Oslo"]="奥斯陆"
+    ["Copenhagen"]="哥本哈根"
+    ["Warsaw"]="华沙"
+    ["Prague"]="布拉格"
+    ["Vienna"]="维也纳"
+    ["Milan"]="米兰"
+    ["Madrid"]="马德里"
+    ["Lisbon"]="里斯本"
+    ["Dublin"]="都柏林"
+    
+    # 国家代码
     ["SG"]="新加坡"
     ["JP"]="日本"
     ["KR"]="韩国"
@@ -63,6 +145,31 @@ declare -A LOCATION_TRANS=(
     ["FR"]="法国"
     ["AU"]="澳大利亚"
     ["IN"]="印度"
+    ["CN"]="中国"
+    ["TW"]="台湾"
+    ["MY"]="马来西亚"
+    ["TH"]="泰国"
+    ["PH"]="菲律宾"
+    ["ID"]="印度尼西亚"
+    ["VN"]="越南"
+    ["RU"]="俄罗斯"
+    ["SE"]="瑞典"
+    ["NO"]="挪威"
+    ["DK"]="丹麦"
+    ["PL"]="波兰"
+    ["CZ"]="捷克"
+    ["AT"]="奥地利"
+    ["IT"]="意大利"
+    ["ES"]="西班牙"
+    ["PT"]="葡萄牙"
+    ["IE"]="爱尔兰"
+    ["BR"]="巴西"
+    ["AR"]="阿根廷"
+    ["CL"]="智利"
+    ["ZA"]="南非"
+    ["AE"]="阿联酋"
+    ["IL"]="以色列"
+    ["TR"]="土耳其"
 )
 
 # 格式化数字
@@ -94,16 +201,14 @@ log() {
 show_menu() {
     clear
     echo
-    echo -e "${GREEN}Solana 验证者节点延迟分析工具${NC}"
-    echo -e "${GREEN}版本: ${VERSION}${NC}"
+    echo -e "${GREEN}Solana 验证者节点延迟分析工具 ${WHITE}v${VERSION}${NC}"
     echo
-    echo -e "${GREEN}功能菜单${NC}"
-    echo -e "${GREEN}1.${NC} 分析所有验证者节点延迟"
-    echo -e "${GREEN}2.${NC} 在后台分析所有节点"
-    echo -e "${GREEN}3.${NC} 测试指定IP的延迟"
-    echo -e "${GREEN}4.${NC} 查看最新分析报告"
-    echo -e "${GREEN}5.${NC} 查看后台任务状态"
-    echo -e "${RED}0.${NC} 退出程序"
+    echo -e "${GREEN}1. 分析所有验证者节点延迟${NC}"
+    echo -e "${GREEN}2. 在后台分析所有节点${NC}"
+    echo -e "${GREEN}3. 测试指定IP的延迟${NC}"
+    echo -e "${GREEN}4. 查看最新分析报告${NC}"
+    echo -e "${GREEN}5. 查看后台任务状态${NC}"
+    echo -e "${RED}0. 退出程序${NC}"
     echo
     echo -ne "${GREEN}请输入您的选择 [0-5]: ${NC}"
 }
@@ -113,15 +218,20 @@ get_location_cn() {
     local location="$1"
     local cn_name=""
     
-    # 遍历位置字符串中的所有部分
-    for key in "${!LOCATION_TRANS[@]}"; do
-        if [[ "$location" == *"$key"* ]]; then
-            if [ -n "$cn_name" ]; then
-                cn_name="${cn_name},"
+    # 首先尝试从IP地理位置API获取
+    if [[ "$location" == "Unknown" || "$location" == "ZZ" ]]; then
+        cn_name=$(get_ip_location "$ip")
+    else
+        # 遍历位置字符串中的所有部分
+        for key in "${!LOCATION_TRANS[@]}"; do
+            if [[ "$location" == *"$key"* ]]; then
+                if [ -n "$cn_name" ]; then
+                    cn_name="${cn_name},"
+                fi
+                cn_name="${cn_name}${LOCATION_TRANS[$key]}"
             fi
-            cn_name="${cn_name}${LOCATION_TRANS[$key]}"
-        fi
-    done
+        done
+    fi
     
     if [ -z "$cn_name" ]; then
         echo "$location"
@@ -140,18 +250,28 @@ update_progress() {
     
     local progress=$((current * 100 / total))
     
-    # 根据延迟值设置颜色
+    # 根据延迟值设置颜色和显示
     local latency_color
     local latency_display
-    if [ "$latency" = "999" ]; then
+    
+    # 改进延迟判断逻辑
+    if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        # 将浮点数转换为整数（去掉小数部分）
+        latency_int=${latency%.*}
+        if [ -z "$latency_int" ]; then
+            latency_int=0
+        fi
+        
+        if [ "$latency_int" -lt 100 ]; then
+            latency_color=$GREEN
+            latency_display="${latency}ms"
+        else
+            latency_color=$YELLOW
+            latency_display="${latency}ms"
+        fi
+    else
         latency_color=$RED
         latency_display="超时"
-    elif [ "$latency" -lt 100 ]; then
-        latency_color=$GREEN
-        latency_display="${latency}ms"
-    else
-        latency_color=$YELLOW
-        latency_display="${latency}ms"
     fi
     
     # 进度条 (使用绿色方块)
@@ -232,22 +352,209 @@ identify_datacenter() {
         local asn_num
         asn_num=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $1}' | xargs)
         
-        local whois_info
-        whois_info=$(whois "$ip" 2>/dev/null)
-        local country
-        country=$(echo "$whois_info" | grep -i "country:" | head -1 | cut -d':' -f2 | xargs)
-        local city
-        city=$(echo "$whois_info" | grep -i "city:" | head -1 | cut -d':' -f2 | xargs)
+        # 获取详细的地理位置信息
+        local location=$(get_ip_location "$ip")
         
-        local location=""
-        [ -n "$city" ] && location="$city"
-        [ -n "$country" ] && location="${location:+$location, }$country"
+        # 如果是云服务提供商，尝试识别具体机房
+        case "$asn_org" in
+            *"Amazon"*|*"AWS"*)
+                local aws_region=$(curl -s --connect-timeout 2 "http://${ip}:8899/health" | jq -r '.region' 2>/dev/null)
+                if [ -n "$aws_region" ]; then
+                    location="AWS ${aws_region} 机房, ${location}"
+                fi
+                ;;
+            *"Google"*|*"GCP"*)
+                local gcp_zone=$(curl -s --connect-timeout 2 "http://metadata.google.internal/computeMetadata/v1/instance/zone" -H "Metadata-Flavor: Google" 2>/dev/null)
+                if [ -n "$gcp_zone" ]; then
+                    location="GCP ${gcp_zone} 机房, ${location}"
+                fi
+                ;;
+            *"Alibaba"*|*"Aliyun"*)
+                local ali_region=$(curl -s --connect-timeout 2 "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null)
+                if [ -n "$ali_region" ]; then
+                    location="阿里云 ${ali_region} 机房, ${location}"
+                fi
+                ;;
+        esac
         
         echo "${asn_org:-Unknown}|${location:-Unknown}"
     else
-        echo "Unknown|Unknown"
+        local location=$(get_ip_location "$ip")
+        echo "Unknown|${location:-Unknown}"
     fi
 }
+
+# 获取位置中文翻译
+get_location_cn() {
+    local location="$1"
+    local cn_name=""
+    
+    # 首先尝试从IP地理位置API获取
+    if [[ "$location" == "Unknown" || "$location" == "ZZ" ]]; then
+        cn_name=$(get_ip_location "$ip")
+    else
+        # 遍历位置字符串中的所有部分
+        for key in "${!LOCATION_TRANS[@]}"; do
+            if [[ "$location" == *"$key"* ]]; then
+                if [ -n "$cn_name" ]; then
+                    cn_name="${cn_name},"
+                fi
+                cn_name="${cn_name}${LOCATION_TRANS[$key]}"
+            fi
+        done
+    fi
+    
+    if [ -z "$cn_name" ]; then
+        echo "$location"
+    else
+        echo "$cn_name"
+    fi
+}
+
+# 更新进度显示
+update_progress() {
+    local current="$1"
+    local total="$2"
+    local ip="$3"
+    local latency="$4"
+    local location="$5"
+    
+    local progress=$((current * 100 / total))
+    
+    # 根据延迟值设置颜色和显示
+    local latency_color
+    local latency_display
+    
+    # 改进延迟判断逻辑
+    if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        # 将浮点数转换为整数（去掉小数部分）
+        latency_int=${latency%.*}
+        if [ -z "$latency_int" ]; then
+            latency_int=0
+        fi
+        
+        if [ "$latency_int" -lt 100 ]; then
+            latency_color=$GREEN
+            latency_display="${latency}ms"
+        else
+            latency_color=$YELLOW
+            latency_display="${latency}ms"
+        fi
+    else
+        latency_color=$RED
+        latency_display="超时"
+    fi
+    
+    # 进度条 (使用绿色方块)
+    local bar_size=20
+    local completed=$((progress * bar_size / 100))
+    local remaining=$((bar_size - completed))
+    local progress_bar=""
+    
+    # 只在有进度时显示绿色方块
+    if [ $completed -gt 0 ]; then
+        for ((i=0; i<completed; i++)); do 
+            progress_bar+="${GREEN}█${NC}"
+        done
+    fi
+    for ((i=0; i<remaining; i++)); do 
+        progress_bar+=" "
+    done
+
+    # 获取位置的中文翻译
+    local location_cn=$(get_location_cn "$location")
+    
+    # 格式化进度显示
+    printf "\r[%s] %3d%% | ${CYAN}%-15s${NC} | 延迟: ${latency_color}%-8s${NC} | 位置: ${WHITE}%-20s${NC}" \
+        "$progress_bar" "$progress" "$ip" "$latency_display" "$location_cn"
+}
+
+# 测试网络质量
+test_network_quality() {
+    local ip="$1"
+    local retries=2
+    local timeout=2
+    local total_time=0
+    local success_count=0
+    local ports=("8899" "8900" "8001" "8000")
+    
+    for ((i=1; i<=retries; i++)); do
+        for port in "${ports[@]}"; do
+            local start_time=$(date +%s%N)
+            if timeout $timeout nc -zv "$ip" "$port" >/dev/null 2>&1; then
+                local end_time=$(date +%s%N)
+                local duration=$(( (end_time - start_time) / 1000000 ))
+                total_time=$((total_time + duration))
+                ((success_count++))
+                break
+            fi
+        done
+    done
+    
+    if [ $success_count -gt 0 ]; then
+        local avg_latency=$((total_time / success_count))
+        echo "$avg_latency"
+        return 0
+    fi
+    
+    if command -v curl >/dev/null 2>&1; then
+        local curl_start=$(date +%s%N)
+        if curl -s -o /dev/null -w '%{time_total}\n' --connect-timeout 2 "http://$ip:8899" 2>/dev/null; then
+            local curl_end=$(date +%s%N)
+            local curl_duration=$(( (curl_end - curl_start) / 1000000 ))
+            echo "$curl_duration"
+            return 0
+        fi
+    fi
+    
+    echo "999"
+    return 0
+}
+
+# 识别数据中心
+identify_datacenter() {
+    local ip="$1"
+    local asn_info
+    asn_info=$(whois -h whois.cymru.com " -v $ip" 2>/dev/null)
+    
+    if [ $? -eq 0 ]; then
+        local asn_org
+        asn_org=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $6}' | xargs)
+        local asn_num
+        asn_num=$(echo "$asn_info" | tail -n1 | awk -F'|' '{print $1}' | xargs)
+        
+        # 获取详细的地理位置信息
+        local location=$(get_ip_location "$ip")
+        
+        # 如果是云服务提供商，尝试识别具体机房
+        case "$asn_org" in
+            *"Amazon"*|*"AWS"*)
+                local aws_region=$(curl -s --connect-timeout 2 "http://${ip}:8899/health" | jq -r '.region' 2>/dev/null)
+                if [ -n "$aws_region" ]; then
+                    location="AWS ${aws_region} 机房, ${location}"
+                fi
+                ;;
+            *"Google"*|*"GCP"*)
+                local gcp_zone=$(curl -s --connect-timeout 2 "http://metadata.google.internal/computeMetadata/v1/instance/zone" -H "Metadata-Flavor: Google" 2>/dev/null)
+                if [ -n "$gcp_zone" ]; then
+                    location="GCP ${gcp_zone} 机房, ${location}"
+                fi
+                ;;
+            *"Alibaba"*|*"Aliyun"*)
+                local ali_region=$(curl -s --connect-timeout 2 "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null)
+                if [ -n "$ali_region" ]; then
+                    location="阿里云 ${ali_region} 机房, ${location}"
+                fi
+                ;;
+        esac
+        
+        echo "${asn_org:-Unknown}|${location:-Unknown}"
+    else
+        local location=$(get_ip_location "$ip")
+        echo "Unknown|${location:-Unknown}"
+    fi
+}
+
 
 # 获取验证者信息
 get_validators() {
@@ -387,7 +694,7 @@ generate_report() {
         echo "### 最优部署方案"
         echo "| 供应商          | 数据中心位置        | IP网段          | 平均延迟     | 测试IP          | 测试延迟    |"
         echo "|-----------------|-------------------|----------------|------------|-----------------|------------|"
-        
+
         # 从结果文件中提取最优的部署方案
         awk -F'|' '$4!=999 {
             provider=$2
@@ -431,14 +738,15 @@ generate_report() {
         echo "### 部署建议详情"
         echo
         echo "1. 优选部署方案"
-        printf "   %-15s %s\n" "推荐供应商:" "Tencent Cloud, AWS, Alibaba Cloud"
-        printf "   %-15s %s\n" "推荐地区:" "新加坡, 东京, 首尔"
+        printf "   %-15s %s\n" "推荐供应商:" "AWS, Alibaba Cloud, Tencent Cloud"
+        printf "   %-15s %s\n" "推荐机房:" "AWS-ap-southeast-1(新加坡), AWS-ap-northeast-1(东京)"
+        printf "   %-15s %s\n" "备选机房:" "AWS-ap-east-1(香港), AWS-ap-south-1(孟买)"
         printf "   %-15s %s\n" "网络要求:" "公网带宽 ≥ 100Mbps"
         printf "   %-15s %s\n" "预期延迟:" "10-30ms"
         echo
         echo "2. 备选部署方案"
-        printf "   %-15s %s\n" "备选供应商:" "DigitalOcean, Google Cloud"
-        printf "   %-15s %s\n" "备选地区:" "香港, 法兰克福"
+        printf "   %-15s %s\n" "备选供应商:" "Google Cloud, Azure, DigitalOcean"
+        printf "   %-15s %s\n" "推荐机房:" "GCP-asia-east2(香港), Azure-eastasia(香港)"
         printf "   %-15s %s\n" "网络要求:" "公网带宽 ≥ 100Mbps"
         printf "   %-15s %s\n" "预期延迟:" "30-50ms"
         echo
@@ -512,7 +820,7 @@ install_solana_cli() {
 
 # 检查依赖
 check_dependencies() {
-    local deps=("curl" "nc" "whois" "awk" "sort")
+    local deps=("curl" "nc" "whois" "awk" "sort" "jq" "geoip-bin")
     local missing=()
 
     for dep in "${deps[@]}"; do
@@ -527,6 +835,9 @@ check_dependencies() {
             log "ERROR" "工具安装失败"
             return 1
         }
+        
+        # 安装 GeoIP 数据库
+        apt-get install -y -qq geoip-database geoip-database-extra
     fi
     return 0
 }
@@ -551,13 +862,16 @@ test_single_ip() {
     
     # 根据延迟值设置颜色
     local latency_color
-    if [ "$latency" = "999" ]; then
+    if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        latency_int=${latency%.*}
+        if [ -z "$latency_int" ] || [ "$latency_int" -lt 100 ]; then
+            latency_color=$GREEN
+        else
+            latency_color=$YELLOW
+        fi
+    else
         latency_color=$RED
         latency="超时"
-    elif [ "$latency" -lt 100 ]; then
-        latency_color=$GREEN
-    else
-        latency_color=$YELLOW
     fi
     
     echo -e "延迟: ${latency_color}${latency}ms${NC}"
@@ -660,4 +974,4 @@ main() {
 
 # 启动程序
 main "$@"
-
+        
