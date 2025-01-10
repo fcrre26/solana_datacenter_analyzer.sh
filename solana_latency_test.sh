@@ -172,7 +172,7 @@ update_progress() {
 
 # 分析验证者节点
 analyze_validators() {
-    local background="${1:-false}"
+    local background="${1:-false}"  # 添加默认值
     BACKGROUND_MODE="$background"
     
     log "INFO" "开始分析验证者节点分布"
@@ -394,12 +394,15 @@ show_menu() {
 
 # 主函数
 main() {
+    # 添加参数的默认值处理
+    local cmd="${1:-}"
+    
     if [ "$EUID" -ne 0 ]; then 
         log "ERROR" "请使用root权限运行此脚本"
         exit 1
     fi
     
-    if [ "$1" = "background" ]; then
+    if [ "$cmd" = "background" ]; then
         analyze_validators true
         exit 0
     fi
