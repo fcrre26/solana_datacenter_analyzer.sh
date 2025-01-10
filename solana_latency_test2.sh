@@ -1216,6 +1216,124 @@ show_config_menu() {
     load_config
 }
 
+# 分析验证者节点
+analyze_validators() {
+    local background="${1:-false}"
+    local parallel="${2:-false}"
+    BACKGROUND_MODE="$background"
+    
+    log "INFO" "开始分析验证者节点分布"
+    log "INFO" "运行模式: $([ "$background" = "true" ] && echo "后台" || echo "前台")"
+    log "INFO" "处理模式: $([ "$parallel" = "true" ] && echo "并发" || echo "单线程")"
+    
+    # 获取验证者列表
+    local validator_ips
+    validator_ips=$(get_validators) || {
+        log "ERROR" "获取验证者信息失败"
+        return 1
+    }
+    
+    # 创建临时目录和文件
+    mkdir -p "${TEMP_DIR}/results"
+    : > "${RESULTS_FILE}"
+    echo "$validator_ips" > "${TEMP_DIR}/tmp_ips.txt"
+    
+    local total=$(wc -l < "${TEMP_DIR}/tmp_ips.txt")
+    local current=0
+    START_TIME=$(date +%s)
+    
+    log "INFO" "找到 ${total} 个验证者节点"
+    
+    if [ "$parallel" = "true" ]; then
+        log "INFO" "使用 ${MAX_CONCURRENT_JOBS:-10} 个并发任务"
+        
+        # 并发处理
+        local queue_size=${MAX_CONCURRENT_JOBS:-10}
+        local running=0
+        declare -A pids
+        
+        # 创建FIFO管道来控制并发
+        local pipe="${TEMP_DIR}/pipe"
+        mkfifo "$pipe"
+        exec 3<>"$pipe"
+        rm "$pipe"
+        
+        # 初始化并发控制
+        for ((i=1; i<=$queue_size; i++)); do
+            echo >&3
+        done
+        
+        while IFS= read -r ip || [ -n "$ip" ]; do
+            # 从管道读取令牌
+            read -u3
+            
+            {
+                local latency=$(test_network_quality "$ip")
+                local ip_info=$(get_ip_info "$ip")
+                local provider_info=$(identify_provider \
+                    "$(echo "$ip_info" | jq -r '.org // "Unknown"')" \
+                    "$(echo "$ip_info" | jq -r '.location // "Unknown"')")
+                
+                local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
+                local region_code=$(echo "$provider_info" | cut -d'|' -f2)
+                local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
+                
+                echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "${RESULTS_FILE}"
+                
+                ((current++))
+                
+                if [ "$background" = "false" ]; then
+                    update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
+                fi
+                
+                # 返回令牌到管道
+                echo >&3
+            } &
+            
+        done < "${TEMP_DIR}/tmp_ips.txt"
+        
+        # 等待所有任务完成
+        wait
+        
+        # 关闭管道
+        exec 3>&-
+        
+    else
+        # 单线程处理
+        while IFS= read -r ip || [ -n "$ip" ]; do
+            ((current++))
+            
+            local latency=$(test_network_quality "$ip")
+            local ip_info=$(get_ip_info "$ip")
+            local provider_info=$(identify_provider \
+                "$(echo "$ip_info" | jq -r '.org // "Unknown"')" \
+                "$(echo "$ip_info" | jq -r '.location // "Unknown"')")
+            
+            local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
+            local region_code=$(echo "$provider_info" | cut -d'|' -f2)
+            local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
+            
+            echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "${RESULTS_FILE}"
+            
+            if [ "$background" = "false" ]; then
+                update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
+            fi
+            
+        done < "${TEMP_DIR}/tmp_ips.txt"
+    fi
+    
+    generate_report
+    
+    if [ "$background" = "true" ]; then
+        log "SUCCESS" "后台分析完成！报告已生成: ${LATEST_REPORT}"
+    else
+        log "SUCCESS" "分析完成！报告已生成: ${LATEST_REPORT}"
+    fi
+    
+    return 0
+}
+
+
 # 主函数
 main() {
     local cmd="${1:-}"
