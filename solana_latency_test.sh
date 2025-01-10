@@ -436,17 +436,28 @@ update_progress() {
     local remaining_items=$((total - current))
     local eta=$((time_per_item * remaining_items))
     
+    # 每20行显示一次进度条和表头
+    if [ $((current % 20)) -eq 1 ]; then
+        # 打印总进度（在顶部）
+        printf "\n[" 
+        printf "${GREEN}█%.0s${NC}" $(seq 1 $((progress * 40 / 100)))
+        printf "${WHITE}░%.0s${NC}" $(seq 1 $((40 - progress * 40 / 100)))
+        printf "] ${GREEN}%3d%%${NC} | 已测试: ${GREEN}%d${NC}/${WHITE}%d${NC} | 预计剩余: ${WHITE}%dm%ds${NC}\n\n" \
+            "$progress" "$current" "$total" \
+            $((eta / 60)) $((eta % 60))
+        
+        # 只在每页开始时显示表头
+        printf "${WHITE}%-10s | %-15s | %-8s | %-15s | %-30s | %-15s${NC}\n" \
+            "时间" "IP地址" "延迟" "供应商" "机房位置" "进度"
+        printf "${WHITE}%s${NC}\n" "$(printf '=%.0s' {1..100})"
+    fi
+    
     # 延迟颜色处理
     local latency_color
     local latency_display
-    
     if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         latency_int=${latency%.*}
-        if [ -z "$latency_int" ]; then
-            latency_int=0
-        fi
-        
-        if [ "$latency_int" -lt 100 ]; then
+        if [ -z "$latency_int" ] || [ "$latency_int" -lt 100 ]; then
             latency_color=$GREEN
             latency_display="${latency}ms"
         else
@@ -481,20 +492,7 @@ update_progress() {
             ;;
     esac
     
-    # 打印总进度（在顶部）
-    printf "\n[" 
-    printf "${GREEN}█%.0s${NC}" $(seq 1 $((progress * 40 / 100)))
-    printf "${WHITE}░%.0s${NC}" $(seq 1 $((40 - progress * 40 / 100)))
-    printf "] ${GREEN}%3d%%${NC} | 已测试: ${GREEN}%d${NC}/${WHITE}%d${NC} | 预计剩余: ${WHITE}%dm%ds${NC}\n" \
-        "$progress" "$current" "$total" \
-        $((eta / 60)) $((eta % 60))
-    
-    # 格式化显示表头
-    printf "${WHITE}%-10s | %-15s | %-8s | %-15s | %-30s | %-15s${NC}\n" \
-        "时间" "IP地址" "延迟" "供应商" "机房位置" "进度"
-    printf "${WHITE}%s${NC}\n" "$(printf '=%.0s' {1..100})"
-    
-    # 打印当前测试结果
+    # 打印当前测试结果（交替颜色）
     if [ $((current % 2)) -eq 0 ]; then
         printf "${GREEN}%s | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15s | ${WHITE}%-30s${NC} | ${GREEN}%d/%d${NC}\n" \
             "$(date '+%H:%M:%S')" \
@@ -513,6 +511,7 @@ update_progress() {
             "$current" "$total"
     fi
 }
+
 
 # 获取验证者信息
 get_validators() {
