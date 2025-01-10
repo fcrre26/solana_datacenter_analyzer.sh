@@ -164,10 +164,13 @@ check_dependencies() {
         fi
         
         # 安装 GeoIP 数据库
-        if ! apt-get install -y -qq geoip-database geoip-database-extra; then
+        if ! apt-get install -y -qq geoip-database; then
             log "ERROR" "GeoIP 数据库安装失败"
             return 1
         fi
+        
+        # 尝试安装额外的 GeoIP 数据库，但允许失败
+        apt-get install -y -qq geoip-database-extra || log "WARN" "额外的 GeoIP 数据库安装失败，继续使用基本数据库"
         
         log "SUCCESS" "工具安装完成"
     fi
