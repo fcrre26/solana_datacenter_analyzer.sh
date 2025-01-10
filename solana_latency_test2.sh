@@ -1333,7 +1333,6 @@ analyze_validators() {
     return 0
 }
 
-
 # 主函数
 main() {
     local cmd="${1:-}"
