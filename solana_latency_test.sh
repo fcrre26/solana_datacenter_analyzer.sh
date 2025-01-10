@@ -203,78 +203,126 @@ get_ip_info() {
     
     # 清理字符串函数
     clean_string() {
-        local str="${1:-Unknown}"
-        echo "$str" | tr -dc '[:print:]' | sed 's/["\]/\\&/g' | sed 's/[^a-zA-Z0-9.,_ -]//g' || echo "Unknown"
+        local str="${1:-}"
+        [ -z "$str" ] && return 1
+        echo "$str" | tr -dc '[:print:]' | sed 's/["\]/\\&/g' | sed 's/[^a-zA-Z0-9.,_ -]//g'
     }
     
-    while [ $retry_count -lt $max_retries ]; do
+    # 尝试多个API获取信息
+    get_provider_info() {
+        local ip="$1"
+        
         # 尝试 ip-api.com
-        info=$(curl -s --max-time 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as")
+        local info=$(curl -s -m 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as")
         if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
-            # 清理和转义数据
-            local org
-            local city
-            local country
+            local as=$(echo "$info" | jq -r '.as // empty')
+            local isp=$(echo "$info" | jq -r '.isp // empty')
+            local org=$(echo "$info" | jq -r '.org // empty')
             
-            org=$(echo "$info" | jq -r '.isp // .org // "Unknown"' || echo "Unknown")
-            city=$(echo "$info" | jq -r '.city // "Unknown"' || echo "Unknown")
-            country=$(echo "$info" | jq -r '.country // "Unknown"' || echo "Unknown")
-            
-            org=$(clean_string "$org")
-            city=$(clean_string "$city")
-            country=$(clean_string "$country")
-            
-            # 构建地理位置字符串
-            local location="${city}, ${country}"
-            [ "$city" = "Unknown" ] && [ "$country" != "Unknown" ] && location="$country"
-            [ "$city" != "Unknown" ] && [ "$country" = "Unknown" ] && location="$city"
-            [ "$city" = "Unknown" ] && [ "$country" = "Unknown" ] && location="Unknown"
-            
-            # 返回清理过的JSON
-            printf '{"ip":"%s","org":"%s","location":"%s"}' \
-                  "$ip" \
-                  "${org:-Unknown}" \
-                  "${location:-Unknown}"
-            return 0
+            # 优先使用最详细的信息
+            if [ -n "$as" ] && [ "$as" != "null" ]; then
+                echo "$as"
+                return 0
+            elif [ -n "$isp" ] && [ "$isp" != "null" ]; then
+                echo "$isp"
+                return 0
+            elif [ -n "$org" ] && [ "$org" != "null" ]; then
+                echo "$org"
+                return 0
+            fi
         fi
         
-        # 备用：ipinfo.io
-        info=$(curl -s --max-time 3 "https://ipinfo.io/${ip}/json")
+        # 尝试 ipinfo.io
+        info=$(curl -s -m 3 "https://ipinfo.io/${ip}/json")
         if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.bogon // empty')" != "true" ]; then
-            # 清理和转义数据
-            local org
-            local city
-            local country
+            local asn=$(echo "$info" | jq -r '.asn // empty')
+            local org=$(echo "$info" | jq -r '.org // empty')
             
-            org=$(echo "$info" | jq -r '.org // "Unknown"' || echo "Unknown")
-            city=$(echo "$info" | jq -r '.city // "Unknown"' || echo "Unknown")
-            country=$(echo "$info" | jq -r '.country // "Unknown"' || echo "Unknown")
-            
-            org=$(clean_string "$org")
-            city=$(clean_string "$city")
-            country=$(clean_string "$country")
-            
-            # 构建地理位置字符串
-            local location="${city}, ${country}"
-            [ "$city" = "Unknown" ] && [ "$country" != "Unknown" ] && location="$country"
-            [ "$city" != "Unknown" ] && [ "$country" = "Unknown" ] && location="$city"
-            [ "$city" = "Unknown" ] && [ "$country" = "Unknown" ] && location="Unknown"
-            
-            # 返回清理过的JSON
-            printf '{"ip":"%s","org":"%s","location":"%s"}' \
-                  "$ip" \
-                  "${org:-Unknown}" \
-                  "${location:-Unknown}"
-            return 0
+            if [ -n "$asn" ] && [ "$asn" != "null" ]; then
+                echo "$asn"
+                return 0
+            elif [ -n "$org" ] && [ "$org" != "null" ]; then
+                echo "$org"
+                return 0
+            fi
         fi
         
-        ((retry_count++))
-        [ $retry_count -lt $max_retries ] && sleep 1
-    done
+        # 尝试 ipapi.co
+        info=$(curl -s -m 3 "https://ipapi.co/${ip}/json/")
+        if [ -n "$info" ]; then
+            local org=$(echo "$info" | jq -r '.org // empty')
+            local asn=$(echo "$info" | jq -r '.asn // empty')
+            
+            if [ -n "$org" ] && [ "$org" != "null" ]; then
+                echo "$org"
+                return 0
+            elif [ -n "$asn" ] && [ "$asn" != "null" ]; then
+                echo "$asn"
+                return 0
+            fi
+        fi
+        
+        # 如果都失败了，返回空
+        return 1
+    }
     
-    # 默认返回
-    printf '{"ip":"%s","org":"Unknown","location":"Unknown"}' "$ip"
-    return 0
+    # 获取位置信息
+    get_location_info() {
+        local ip="$1"
+        
+        # 尝试 ip-api.com
+        local info=$(curl -s -m 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city")
+        if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
+            local city=$(echo "$info" | jq -r '.city // empty')
+            local country=$(echo "$info" | jq -r '.country // empty')
+            
+            if [ -n "$city" ] && [ "$city" != "null" ] && [ -n "$country" ] && [ "$country" != "null" ]; then
+                echo "${city}, ${country}"
+                return 0
+            elif [ -n "$city" ] && [ "$city" != "null" ]; then
+                echo "$city"
+                return 0
+            elif [ -n "$country" ] && [ "$country" != "null" ]; then
+                echo "$country"
+                return 0
+            fi
+        fi
+        
+        # 尝试 ipinfo.io
+        info=$(curl -s -m 3 "https://ipinfo.io/${ip}/json")
+        if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.bogon // empty')" != "true" ]; then
+            local city=$(echo "$info" | jq -r '.city // empty')
+            local region=$(echo "$info" | jq -r '.region // empty')
+            local country=$(echo "$info" | jq -r '.country // empty')
+            
+            if [ -n "$city" ] && [ "$city" != "null" ] && [ -n "$country" ] && [ "$country" != "null" ]; then
+                echo "${city}, ${country}"
+                return 0
+            elif [ -n "$city" ] && [ "$city" != "null" ]; then
+                echo "$city"
+                return 0
+            elif [ -n "$country" ] && [ "$country" != "null" ]; then
+                echo "$country"
+                return 0
+            fi
+        fi
+        
+        return 1
+    }
+    
+    # 获取供应商信息
+    local provider=$(get_provider_info "$ip")
+    provider=$(clean_string "${provider:-Unknown}")
+    
+    # 获取位置信息
+    local location=$(get_location_info "$ip")
+    location=$(clean_string "${location:-Unknown}")
+    
+    # 返回结果
+    printf '{"ip":"%s","org":"%s","location":"%s"}' \
+          "$ip" \
+          "${provider}" \
+          "${location}"
 }
 
 # 测试网络质量
