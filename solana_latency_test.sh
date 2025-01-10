@@ -913,49 +913,98 @@ show_background_menu() {
         read -r choice
 
         case $choice in
-1)  if [ -f "${BACKGROUND_LOG}" ]; then
-        log "ERROR" "已有后台任务在运行"
-    else
-        log "INFO" "启动后台分析任务..."
-        # 使用完整路径并添加错误重定向
-        nohup "$(readlink -f "$0")" background > "${BACKGROUND_LOG}" 2>&1 &
-        local pid=$!
-        echo $pid > "${TEMP_DIR}/background.pid"
-        sleep 2
-        
-        if kill -0 $pid 2>/dev/null; then
-            log "SUCCESS" "后台任务已启动，进程ID: $pid"
-        else
-            log "ERROR" "后台任务启动失败"
-            rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
-        fi
-    fi
-    read -rp "按回车键继续..."
-    ;;
+            1)  if [ -f "${TEMP_DIR}/background.pid" ]; then
+                    log "ERROR" "已有后台任务在运行"
+                else
+                    log "INFO" "启动后台分析任务..."
+                    
+                    # 获取脚本的完整路径
+                    SCRIPT_PATH=$(readlink -f "$0")
+                    
+                    # 确保目录存在
+                    mkdir -p "${TEMP_DIR}"
+                    mkdir -p "$(dirname "${BACKGROUND_LOG}")"
+                    
+                    # 使用 setsid 启动后台进程
+                    (setsid bash "${SCRIPT_PATH}" background > "${BACKGROUND_LOG}" 2>&1 & echo $! > "${TEMP_DIR}/background.pid")
+                    
+                    # 等待一下确保进程启动
+                    sleep 2
+                    
+                    if [ -f "${TEMP_DIR}/background.pid" ]; then
+                        local pid=$(cat "${TEMP_DIR}/background.pid")
+                        if kill -0 "$pid" 2>/dev/null; then
+                            log "SUCCESS" "后台任务已启动，进程ID: $pid"
+                            log "INFO" "可以使用选项 2 监控任务进度"
+                        else
+                            log "ERROR" "后台任务启动失败"
+                            rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                        fi
+                    else
+                        log "ERROR" "后台任务启动失败：无法创建PID文件"
+                    fi
+                fi
+                ;;
                 
             2)  if [ -f "${BACKGROUND_LOG}" ]; then
+                    clear
                     echo -e "\n${GREEN}正在监控后台任务 (按 Ctrl+C 退出监控)${NC}"
-                    echo -e "${GREEN}===================${NC}"
+                    echo -e "${GREEN}===================${NC}\n"
                     
+                    # 使用 trap 捕获 Ctrl+C
                     trap 'echo -e "\n${GREEN}已退出监控模式${NC}"; return 0' INT
                     
+                    # 创建一个临时文件来存储上一次的进度条位置
+                    local tmp_progress="/tmp/progress_pos"
+                    : > "$tmp_progress"
+                    
                     tail -f "${BACKGROUND_LOG}" | while read -r line; do
-                        if [[ $line == *"["*"]"* ]] || [[ $line == *"|"* ]] || [[ $line == "====="* ]]; then
+                        # 处理进度条
+                        if [[ $line =~ ^\[█+ ]]; then
+                            # 如果存在之前的进度条，先清除它
+                            if [ -s "$tmp_progress" ]; then
+                                local prev_pos=$(cat "$tmp_progress")
+                                echo -en "\033[${prev_pos}A\033[J"
+                            fi
+                            # 记录当前进度条位置
+                            echo "3" > "$tmp_progress"
+                            echo -e "$line"
+                            echo
+                            # 打印表头
+                            printf "${WHITE}%-10s | %-15s | %-8s | %-15s | %-30s | %-15s${NC}\n" \
+                                "时间" "IP地址" "延迟" "供应商" "机房位置" "进度"
+                            echo -e "${WHITE}$(printf '=%.0s' {1..100})${NC}"
+                        # 处理 IP 分析结果行
+                        elif [[ $line =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2}.*\|.*\|.*\|.*\|.*\|.* ]]; then
+                            echo -e "$line"
+                        # 处理普通日志消息
+                        elif [[ $line =~ ^\[[A-Z]+\] ]]; then
                             echo -e "$line"
                         fi
                     done
                     
+                    # 清理临时文件
+                    rm -f "$tmp_progress"
+                    
+                    # 重置 trap
                     trap - INT
                 else
                     log "WARN" "没有运行中的后台任务"
-                    read -rp "按回车键继续..."
                 fi
                 ;;
                 
             3)  if [ -f "${TEMP_DIR}/background.pid" ]; then
                     local pid=$(cat "${TEMP_DIR}/background.pid")
                     if kill -0 "$pid" 2>/dev/null; then
+                        # 尝试优雅地终止进程
                         kill "$pid"
+                        sleep 2
+                        
+                        # 如果进程还在运行，强制终止
+                        if kill -0 "$pid" 2>/dev/null; then
+                            kill -9 "$pid"
+                        fi
+                        
                         rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
                         log "SUCCESS" "后台任务已停止"
                     else
@@ -965,16 +1014,32 @@ show_background_menu() {
                 else
                     log "WARN" "没有运行中的后台任务"
                 fi
-                read -rp "按回车键继续..."
                 ;;
                 
             4)  if [ -f "${TEMP_DIR}/background.pid" ]; then
                     local pid=$(cat "${TEMP_DIR}/background.pid")
-                    if kill -0 $pid 2>/dev/null; then
+                    if kill -0 "$pid" 2>/dev/null; then
                         log "INFO" "后台任务正在运行 (PID: $pid)"
                         if [ -f "${PROGRESS_FILE}" ]; then
                             local progress=$(cat "${PROGRESS_FILE}")
                             log "INFO" "当前进度: $progress"
+                        fi
+                        
+                        # 显示资源使用情况
+                        local cpu_usage=$(ps -p "$pid" -o %cpu | tail -n 1)
+                        local mem_usage=$(ps -p "$pid" -o %mem | tail -n 1)
+                        log "INFO" "CPU使用率: ${cpu_usage}%"
+                        log "INFO" "内存使用率: ${mem_usage}%"
+                        
+                        # 显示运行时间
+                        if [ -f "${TEMP_DIR}/start_time" ]; then
+                            local start_time=$(cat "${TEMP_DIR}/start_time")
+                            local current_time=$(date +%s)
+                            local runtime=$((current_time - start_time))
+                            local hours=$((runtime / 3600))
+                            local minutes=$(( (runtime % 3600) / 60 ))
+                            local seconds=$((runtime % 60))
+                            log "INFO" "运行时间: ${hours}小时 ${minutes}分钟 ${seconds}秒"
                         fi
                     else
                         log "WARN" "后台任务已结束"
@@ -983,7 +1048,6 @@ show_background_menu() {
                 else
                     log "INFO" "没有运行中的后台任务"
                 fi
-                read -rp "按回车键继续..."
                 ;;
                 
             5)  if [ -f "${LATEST_REPORT}" ]; then
@@ -992,18 +1056,19 @@ show_background_menu() {
                 else
                     log "ERROR" "未找到分析报告"
                 fi
-                read -rp "按回车键继续..."
                 ;;
                 
-            0)  break 
-                ;;
+            0)  break ;;
                 
             *)  log "ERROR" "无效选择"
                 sleep 1
                 ;;
         esac
+        
+        [ "$choice" != "2" ] && read -rp "按回车键继续..."
     done
 }
+
 
 # 测试单个IP
 test_single_ip() {
