@@ -37,6 +37,66 @@ VERSION="v1.3.0"
 # 创建必要的目录
 mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
 
+# 创建必要的目录
+mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
+
+# [在这里添加新函数]
+# 检查依赖
+check_dependencies() {
+    local deps=("curl" "nc" "whois" "awk" "sort" "jq" "geoip-bin")
+    local missing=()
+
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" &>/dev/null; then
+            missing+=("$dep")
+        fi
+    done
+
+    if [ ${#missing[@]} -ne 0 ]; then
+        log "INFO" "正在安装必要工具: ${missing[*]}"
+        apt-get update -qq && apt-get install -y -qq "${missing[@]}" || {
+            log "ERROR" "工具安装失败"
+            return 1
+        }
+        
+        # 安装 GeoIP 数据库
+        apt-get install -y -qq geoip-database geoip-database-extra
+    fi
+    return 0
+}
+
+# 安装 Solana CLI
+install_solana_cli() {
+    if ! command -v solana &>/dev/null; then
+        log "INFO" "Solana CLI 未安装,开始安装..."
+        
+        mkdir -p "$SOLANA_INSTALL_DIR"
+        
+        local VERSION="v1.18.15"
+        local DOWNLOAD_URL="https://release.solana.com/$VERSION/solana-release-x86_64-unknown-linux-gnu.tar.bz2"
+        
+        curl -L "$DOWNLOAD_URL" | tar jxf - -C "$SOLANA_INSTALL_DIR" || {
+            log "ERROR" "Solana CLI 下载失败"
+            return 1
+        }
+        
+        rm -rf "$SOLANA_INSTALL_DIR/active_release"
+        ln -s "$SOLANA_INSTALL_DIR/solana-release" "$SOLANA_INSTALL_DIR/active_release"
+        
+        export PATH="$SOLANA_INSTALL_DIR/active_release/bin:$PATH"
+        
+        solana config set --url https://api.mainnet-beta.solana.com || {
+            log "ERROR" "Solana CLI 配置失败"
+            return 1
+        }
+        
+        log "SUCCESS" "Solana CLI 安装成功"
+    else
+        log "INFO" "Solana CLI 已安装"
+    fi
+    return 0
+}
+
 # 错误处理函数
 handle_error() {
     local exit_code=$?
