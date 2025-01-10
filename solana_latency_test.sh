@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # 设置环境变量
-export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
+SOLANA_INSTALL_DIR="/root/.local/share/solana/install"
+export PATH="$SOLANA_INSTALL_DIR/active_release/bin:$PATH"
 
 # 启用严格模式
 set -euo pipefail
@@ -116,15 +117,26 @@ install_solana_cli() {
     if ! command -v solana &>/dev/null; then
         log "INFO" "Solana CLI 未安装,开始安装..."
         
-        # 使用特定版本安装
+        # 创建安装目录
+        local SOLANA_INSTALL_DIR="/root/.local/share/solana/install"
+        mkdir -p "$SOLANA_INSTALL_DIR"
+        
+        # 下载并安装特定版本
         local VERSION="v1.18.15"
-        sh -c "$(curl -sSfL https://release.solana.com/$VERSION/install)" || {
+        local DOWNLOAD_URL="https://release.solana.com/$VERSION/solana-release-x86_64-unknown-linux-gnu.tar.bz2"
+        
+        # 下载并解压
+        curl -L "$DOWNLOAD_URL" | tar jxf - -C "$SOLANA_INSTALL_DIR" || {
             log "ERROR" "Solana CLI 下载失败"
             return 1
         }
         
-        # 直接设置环境变量，不修改 .bashrc
-        export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
+        # 创建符号链接
+        rm -rf "$SOLANA_INSTALL_DIR/active_release"
+        ln -s "$SOLANA_INSTALL_DIR/solana-release" "$SOLANA_INSTALL_DIR/active_release"
+        
+        # 直接设置环境变量
+        export PATH="$SOLANA_INSTALL_DIR/active_release/bin:$PATH"
         
         # 验证安装
         if ! command -v solana &>/dev/null; then
