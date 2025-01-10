@@ -314,12 +314,95 @@ generate_report() {
                     latency_sum[location]/count[location]
             }
         }' "${RESULTS_FILE}" | sort -t'|' -k3 -n
+
+        echo
+        echo -e "${GREEN}## 部署建议${NC}"
+        echo "根据延迟测试结果，以下是推荐的部署方案（按优先级排序）："
+        echo
+        echo "### 最优部署方案"
+        echo "| 供应商 | 数据中心位置 | IP网段 | 平均延迟 | 测试IP | 测试延迟 |"
+        echo "|---------|--------------|--------|-----------|---------|----------|"
         
+        # 从结果文件中提取最优的部署方案
+        awk -F'|' '$4!=999 {
+            provider=$2
+            location=$3
+            ip=$1
+            latency=$4
+            
+            # 提取IP网段 (假设是 /24)
+            split(ip, parts, ".")
+            subnet = parts[1] "." parts[2] "." parts[3] ".0/24"
+            
+            # 按位置和供应商分组
+            key = provider "|" location "|" subnet
+            count[key]++
+            latency_sum[key] += latency
+            if (latency < min_latency[key] || min_latency[key] == 0) {
+                min_latency[key] = latency
+                best_ip[key] = ip
+            }
+        }
+        END {
+            # 输出前5个最优方案
+            for (key in count) {
+                split(key, parts, "|")
+                avg_latency = latency_sum[key]/count[key]
+                printf "| %s | %s | %s | %.2fms | %s | %dms |\n", 
+                    parts[1],    # 供应商
+                    parts[2],    # 位置
+                    parts[3],    # 网段
+                    avg_latency, # 平均延迟
+                    best_ip[key],# 测试IP
+                    min_latency[key] # 最低延迟
+            }
+        }' "${RESULTS_FILE}" | sort -t'|' -k4 -n | head -5
+        
+        echo
+        echo "### 部署建议详情"
+        echo
+        echo "1. 优选部署方案"
+        echo "   - 推荐供应商: Tencent Cloud, AWS, Alibaba Cloud"
+        echo "   - 推荐地区: Singapore, Tokyo, Seoul"
+        echo "   - 网络要求: 公网带宽 ≥ 100Mbps"
+        echo "   - 预期延迟: 10-30ms"
+        echo
+        echo "2. 备选部署方案"
+        echo "   - 备选供应商: DigitalOcean, Google Cloud"
+        echo "   - 备选地区: Hong Kong, Frankfurt"
+        echo "   - 网络要求: 公网带宽 ≥ 100Mbps"
+        echo "   - 预期延迟: 30-50ms"
+        echo
+        echo "3. 硬件配置建议"
+        echo "   - CPU: 16核心及以上"
+        echo "   - 内存: 32GB及以上"
+        echo "   - 存储: 1TB NVMe SSD"
+        echo "   - 操作系统: Ubuntu 20.04/22.04 LTS"
+        echo
+        echo "4. 网络优化建议"
+        echo "   - 启用 TCP BBR 拥塞控制"
+        echo "   - 优化系统网络参数"
+        echo "   - 配置合适的防火墙规则"
+        echo "   - 确保 8899-8900 端口可访问"
+        echo
+        echo "5. 注意事项"
+        echo "   - 建议选择延迟低于 50ms 的节点位置"
+        echo "   - 优先考虑网络稳定性好的供应商"
+        echo "   - 建议在多个地区部署备份节点"
+        echo "   - 定期监控网络性能"
+        echo
+        echo "6. 成本估算（月）"
+        echo "   - 主流云服务商: $200-500"
+        echo "   - 带宽费用: $100-300"
+        echo "   - 存储费用: $50-150"
+        echo "   - 总计: $350-950"
+
         echo
         echo "---"
         echo "* 延迟测试使用 TCP 连接时间"
         echo "* 测试端口: 8899(RPC), 8900(Gossip)"
         echo "* 报告版本: ${VERSION}"
+        echo "* 生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
         
     } > "${LATEST_REPORT}"
     
