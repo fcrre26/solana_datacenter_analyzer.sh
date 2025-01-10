@@ -846,9 +846,17 @@ show_background_menu() {
             1)  if [ -f "${BACKGROUND_LOG}" ]; then
                     log "ERROR" "已有后台任务在运行"
                 else
-                    nohup bash "$0" background > "${BACKGROUND_LOG}" 2>&1 &
-                    log "SUCCESS" "后台任务已启动，进程ID: $!"
-                    echo $! > "${TEMP_DIR}/background.pid"
+                    # 修改这里的后台任务启动方式
+                    bash "$0" background > "${BACKGROUND_LOG}" 2>&1 &
+                    local pid=$!
+                    echo $pid > "${TEMP_DIR}/background.pid"
+                    sleep 1  # 等待一秒确保进程启动
+                    if kill -0 $pid 2>/dev/null; then
+                        log "SUCCESS" "后台任务已启动，进程ID: $pid"
+                    else
+                        log "ERROR" "后台任务启动失败"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                    fi
                 fi
                 read -rp "按回车键继续..."
                 ;;
