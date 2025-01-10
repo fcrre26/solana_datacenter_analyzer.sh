@@ -833,35 +833,35 @@ generate_report() {
     log "SUCCESS" "报告已生成: ${LATEST_REPORT}"
 }
 
-
-
-# 并发分析验证者节点
-analyze_validators_parallel() {
+# 分析验证者节点
+analyze_validators() {
     local background="${1:-false}"
     BACKGROUND_MODE="$background"
-    local max_jobs=${MAX_CONCURRENT_JOBS:-10}
     
-    log "INFO" "开始并发分析验证者节点分布"
+    log "INFO" "开始分析验证者节点分布"
+    log "INFO" "运行模式: $([ "$background" = "true" ] && echo "后台" || echo "前台")"
+    log "INFO" "正在初始化..."
     
-    # 检查系统资源
-    local available_memory=$(free -m | awk '/^Mem:/{print $2}')
-    local recommended_jobs=$((available_memory / 200))
-    
-    if [ $max_jobs -gt $recommended_jobs ]; then
-        log "WARN" "当前内存可能不足以支持 $max_jobs 个并发任务"
-        log "INFO" "建议将并发数调整为 $recommended_jobs"
-        if [ "${BACKGROUND_MODE}" = "false" ]; then
-            read -rp "是否继续？[y/N] " confirm
-            if [[ ! $confirm =~ ^[Yy]$ ]]; then
-                return 1
-            fi
-        fi
+    if ! command -v solana >/dev/null 2>&1; then
+        log "ERROR" "Solana CLI 未安装或未正确配置"
+        return 1
     fi
     
-    # 获取验证者信息
+    # 检查必要的目录和文件
+    mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
+    
+    # 检查并创建锁文件
+    if [ "$background" = "false" ] && [ -f "$LOCK_FILE" ]; then
+        log "ERROR" "另一个分析任务正在运行"
+        return 1
+    fi
+    [ "$background" = "false" ] && touch "$LOCK_FILE"
+    
+    log "INFO" "正在获取验证者信息..."
     local validator_ips
     validator_ips=$(get_validators) || {
         log "ERROR" "获取验证者信息失败"
+        [ "$background" = "false" ] && rm -f "$LOCK_FILE"
         return 1
     }
     
@@ -874,74 +874,91 @@ analyze_validators_parallel() {
     START_TIME=$(date +%s)
     
     log "INFO" "找到 ${total} 个验证者节点"
+    log "INFO" "开始分析节点..."
     echo "----------------------------------------"
     
-    # 创建临时结果目录
-    local tmp_result_dir="${TEMP_DIR}/results"
-    mkdir -p "$tmp_result_dir"
-    rm -f "${tmp_result_dir}"/*
+    # 创建进度文件
+    echo "0/${total}" > "${PROGRESS_FILE}"
     
-    # 创建信号量
-    local sem_file="${TEMP_DIR}/semaphore"
-    mkfifo "$sem_file"
-    exec 3<>"$sem_file"
-    rm "$sem_file"
-    
-    # 初始化信号量
-    for ((i=1; i<=max_jobs; i++)); do
-        echo $i >&3
-    done
-    
-    # 并发测试
     while read -r ip; do
-        read -u 3 token
         ((current++))
         
-        {
-            local result_file="${tmp_result_dir}/${current}.result"
-            local latency=$(test_network_quality "$ip")
-            local ip_info=$(get_ip_info "$ip")
-            local provider_info=$(identify_provider "$(echo "$ip_info" | jq -r '.org // .isp // "Unknown"')" "$(echo "$ip_info" | jq -r '.city // "Unknown"'), $(echo "$ip_info" | jq -r '.country_name // .country // "Unknown"')")
-            
-            local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
-            local region_code=$(echo "$provider_info" | cut -d'|' -f2)
-            local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
-            
-            echo "$latency|$cloud_provider|$datacenter|$region_code" > "$result_file"
-            
-            # 更新进度
-            {
-                flock -x 200
-                update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
-                echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "${RESULTS_FILE}"
-            } 200>>"${TEMP_DIR}/progress.lock"
-            
-            # 释放信号量
-            echo "$token" >&3
-            
-        } &
+        # 更新进度文件
+        echo "${current}/${total}" > "${PROGRESS_FILE}"
+        
+        # 测试网络延迟
+        local latency=$(test_network_quality "$ip")
+        
+        # 获取IP信息
+        local ip_info
+        local retry_count=0
+        local max_retries=3
+        
+        while [ $retry_count -lt $max_retries ]; do
+            ip_info=$(get_ip_info "$ip")
+            if [ -n "$ip_info" ]; then
+                break
+            fi
+            ((retry_count++))
+            [ $retry_count -lt $max_retries ] && sleep 1
+        done
+        
+        # 如果获取信息失败，使用默认值
+        if [ -z "$ip_info" ]; then
+            ip_info="{\"ip\":\"$ip\",\"org\":\"Unknown\",\"location\":\"Unknown\"}"
+        fi
+        
+        # 解析供应商和位置信息
+        local provider_info=$(identify_provider \
+            "$(echo "$ip_info" | jq -r '.org // "Unknown"')" \
+            "$(echo "$ip_info" | jq -r '.location // "Unknown"')")
+        
+        local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
+        local region_code=$(echo "$provider_info" | cut -d'|' -f2)
+        local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
+        
+        # 更新显示进度
+        update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
+        
+        # 保存结果
+        echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "${RESULTS_FILE}"
+        
+        # 每处理100个节点保存一次临时报告
+        if [ $((current % 100)) -eq 0 ]; then
+            generate_report &>/dev/null
+        fi
         
     done < "${TEMP_DIR}/tmp_ips.txt"
     
-    # 等待所有任务完成
-    wait
-    
-    # 关闭信号量
-    exec 3>&-
-    
-    # 清理临时文件
-    rm -rf "$tmp_result_dir"
-    rm -f "${TEMP_DIR}/progress.lock"
-    
     echo "----------------------------------------"
+    
+    # 生成最终报告
     generate_report
     
+    # 清理临时文件
+    rm -f "${TEMP_DIR}/tmp_ips.txt"
+    [ "$background" = "false" ] && rm -f "$LOCK_FILE"
+    
+    # 记录完成时间
+    local end_time=$(date +%s)
+    local duration=$((end_time - START_TIME))
+    local hours=$((duration / 3600))
+    local minutes=$(( (duration % 3600) / 60 ))
+    local seconds=$((duration % 60))
+    
     if [ "$background" = "true" ]; then
-        log "SUCCESS" "后台并发分析完成！报告已生成: ${LATEST_REPORT}"
+        log "SUCCESS" "后台分析完成！用时: ${hours}小时 ${minutes}分钟 ${seconds}秒"
+        log "INFO" "报告已生成: ${LATEST_REPORT}"
+        # 清理后台任务相关文件
+        rm -f "${TEMP_DIR}/background.pid"
     else
-        log "SUCCESS" "并发分析完成！报告已生成: ${LATEST_REPORT}"
+        log "SUCCESS" "分析完成！用时: ${hours}小时 ${minutes}分钟 ${seconds}秒"
+        log "INFO" "报告已生成: ${LATEST_REPORT}"
     fi
+    
+    return 0
 }
+
 
 
 # 显示菜单函数
@@ -978,40 +995,47 @@ show_background_menu() {
         read -r choice
 
         case $choice in
-1)  if [ -f "${TEMP_DIR}/background.pid" ]; then
-        log "ERROR" "已有后台任务在运行"
-    else
-        log "INFO" "启动后台分析任务..."
-        
-        # 获取脚本的完整路径
-        SCRIPT_PATH=$(readlink -f "$0")
-        
-        # 确保目录存在
-        mkdir -p "${TEMP_DIR}"
-        mkdir -p "$(dirname "${BACKGROUND_LOG}")"
-        
-        # 记录开始时间
-        date +%s > "${TEMP_DIR}/start_time"
-        
-        # 使用 nohup 启动后台进程
-        nohup bash "${SCRIPT_PATH}" background > "${BACKGROUND_LOG}" 2>&1 &
-        local pid=$!
-        
-        # 保存PID
-        echo $pid > "${TEMP_DIR}/background.pid"
-        
-        # 等待确保进程启动
-        sleep 2
-        
-        if kill -0 $pid 2>/dev/null; then
-            log "SUCCESS" "后台任务已启动，进程ID: $pid"
-            log "INFO" "可以使用选项 2 监控任务进度"
-        else
-            log "ERROR" "后台任务启动失败"
-            rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
-        fi
-    fi
-    ;;
+            1)  if [ -f "${TEMP_DIR}/background.pid" ]; then
+                    log "ERROR" "已有后台任务在运行"
+                else
+                    log "INFO" "启动后台分析任务..."
+                    
+                    # 获取脚本的完整路径
+                    SCRIPT_PATH=$(readlink -f "$0")
+                    
+                    # 确保目录存在
+                    mkdir -p "${TEMP_DIR}"
+                    mkdir -p "$(dirname "${BACKGROUND_LOG}")"
+                    
+                    # 记录开始时间
+                    date +%s > "${TEMP_DIR}/start_time"
+                    
+                    # 使用 nohup 启动后台进程并重定向输出
+                    nohup bash "${SCRIPT_PATH}" background > "${BACKGROUND_LOG}" 2>&1 &
+                    local pid=$!
+                    
+                    # 保存PID
+                    echo $pid > "${TEMP_DIR}/background.pid"
+                    
+                    # 等待确保进程启动
+                    sleep 2
+                    
+                    if kill -0 $pid 2>/dev/null; then
+                        log "SUCCESS" "后台任务已启动，进程ID: $pid"
+                        log "INFO" "可以使用选项 2 监控任务进度"
+                        
+                        # 等待一会儿看看是否有初始输出
+                        sleep 3
+                        if [ -f "${BACKGROUND_LOG}" ]; then
+                            log "INFO" "任务开始运行，最新状态:"
+                            tail -n 5 "${BACKGROUND_LOG}"
+                        fi
+                    else
+                        log "ERROR" "后台任务启动失败"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                    fi
+                fi
+                ;;
                 
             2)  if [ -f "${BACKGROUND_LOG}" ]; then
                     clear
@@ -1107,6 +1131,12 @@ show_background_menu() {
                             local minutes=$(( (runtime % 3600) / 60 ))
                             local seconds=$((runtime % 60))
                             log "INFO" "运行时间: ${hours}小时 ${minutes}分钟 ${seconds}秒"
+                        fi
+                        
+                        # 显示最新日志
+                        if [ -f "${BACKGROUND_LOG}" ]; then
+                            echo -e "\n最新日志:"
+                            tail -n 5 "${BACKGROUND_LOG}"
                         fi
                     else
                         log "WARN" "后台任务已结束"
