@@ -202,24 +202,29 @@ get_ip_info() {
     local info=""
     
     while [ $retry_count -lt $max_retries ]; do
-        # 尝试 ipapi.co
-        info=$(curl -s --max-time 3 "https://ipapi.co/${ip}/json/")
-        if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.error // empty')" = "" ]; then
-            echo "$info"
-            return 0
-        fi
-        
-        # 尝试 ip-api.com
+        # 尝试 ip-api.com（更可靠的选择）
         info=$(curl -s --max-time 3 "http://ip-api.com/json/${ip}")
-        if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.status')" = "success" ]; then
-            echo "$info"
+        if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
+            # 确保返回格式一致的JSON
+            echo "{
+                \"ip\": \"$ip\",
+                \"org\": $(echo "$info" | jq -r '.isp // .org // "Unknown"'),
+                \"city\": $(echo "$info" | jq -r '.city // "Unknown"'),
+                \"country\": $(echo "$info" | jq -r '.country // "Unknown"')
+            }"
             return 0
         fi
         
-        # 尝试 ipinfo.io
+        # 如果第一个API失败，尝试 ipinfo.io
         info=$(curl -s --max-time 3 "https://ipinfo.io/${ip}/json")
         if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.bogon // empty')" != "true" ]; then
-            echo "$info"
+            # 标准化输出格式
+            echo "{
+                \"ip\": \"$ip\",
+                \"org\": $(echo "$info" | jq -r '.org // "Unknown"'),
+                \"city\": $(echo "$info" | jq -r '.city // "Unknown"'),
+                \"country\": $(echo "$info" | jq -r '.country // "Unknown"')
+            }"
             return 0
         fi
         
@@ -227,8 +232,14 @@ get_ip_info() {
         [ $retry_count -lt $max_retries ] && sleep 1
     done
     
-    echo "{\"ip\":\"$ip\",\"error\":\"All APIs failed\",\"org\":\"Unknown\",\"city\":\"Unknown\"}"
-    return 1
+    # 如果所有API都失败，返回标准格式的默认值
+    echo "{
+        \"ip\": \"$ip\",
+        \"org\": \"Unknown\",
+        \"city\": \"Unknown\",
+        \"country\": \"Unknown\"
+    }"
+    return 0
 }
 
 # 测试网络质量
