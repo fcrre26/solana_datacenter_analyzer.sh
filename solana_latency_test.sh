@@ -1067,13 +1067,33 @@ show_background_menu() {
             1)  if [ -f "${BACKGROUND_LOG}" ]; then
                     log "ERROR" "已有后台任务在运行"
                 else
-                    # 使用 nohup 确保后台任务不会被终止
-                    nohup bash "$0" background > "${BACKGROUND_LOG}" 2>&1 &
+                    # 确保目录存在
+                    mkdir -p "$(dirname "${BACKGROUND_LOG}")"
+                    
+                    # 使用完整路径
+                    local script_path=$(readlink -f "$0")
+                    
+                    # 设置正确的权限
+                    touch "${BACKGROUND_LOG}"
+                    chmod 666 "${BACKGROUND_LOG}"
+                    
+                    # 启动后台任务
+                    nohup bash "${script_path}" background > "${BACKGROUND_LOG}" 2>&1 &
                     local pid=$!
+                    
+                    # 保存PID
                     echo $pid > "${TEMP_DIR}/background.pid"
-                    sleep 2  # 等待确保进程启动
-                    if kill -0 $pid 2>/dev/null; then
+                    chmod 666 "${TEMP_DIR}/background.pid"
+                    
+                    # 等待确认进程启动
+                    sleep 2
+                    if ps -p $pid > /dev/null 2>&1; then
                         log "SUCCESS" "后台任务已启动，进程ID: $pid"
+                        # 等待日志文件开始写入
+                        sleep 1
+                        if [ -s "${BACKGROUND_LOG}" ]; then
+                            log "INFO" "日志文件已创建: ${BACKGROUND_LOG}"
+                        fi
                     else
                         log "ERROR" "后台任务启动失败"
                         rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
@@ -1088,8 +1108,8 @@ show_background_menu() {
                 ;;
             3)  if [ -f "${TEMP_DIR}/background.pid" ]; then
                     local pid=$(cat "${TEMP_DIR}/background.pid")
-                    if kill -0 "$pid" 2>/dev/null; then
-                        kill "$pid"
+                    if ps -p $pid > /dev/null 2>&1; then
+                        kill $pid
                         rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
                         log "SUCCESS" "后台任务已停止"
                     else
