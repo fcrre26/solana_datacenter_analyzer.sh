@@ -5,7 +5,7 @@ SOLANA_INSTALL_DIR="/root/.local/share/solana/install"
 export PATH="$SOLANA_INSTALL_DIR/active_release/bin:$PATH"
 
 # 启用严格模式
-set -euo pipefail
+set -eo pipefail
 
 # 颜色定义
 GREEN='\033[0;32m'
