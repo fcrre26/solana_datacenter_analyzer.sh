@@ -1025,23 +1025,17 @@ check_background_task() {
         # 持续监控模式
         trap 'echo -e "\n${GREEN}已退出监控模式${NC}"; return 0' INT
         
-        while true; do
-            clear
-            # 读取并显示最后25行（一页）内容
-            tail -f "${BACKGROUND_LOG}" | while read -r line; do
-                if [[ $line == *"["*"]"* ]] || [[ $line == *"|"* ]] || [[ $line == "====="* ]] || [[ $line == *"INFO"* ]] || [[ $line == *"SUCCESS"* ]]; then
-                    echo -e "$line"
-                fi
-            done
+        # 使用 tail -f 实时显示日志
+        tail -f "${BACKGROUND_LOG}" | while read -r line; do
+            if [[ $line == *"["*"]"* ]] || [[ $line == *"|"* ]] || [[ $line == "====="* ]] || [[ $line == *"INFO"* ]] || [[ $line == *"SUCCESS"* ]]; then
+                echo -e "$line"
+            fi
             
-            if [ ! -f "${TEMP_DIR}/background.pid" ] || ! kill -0 $(cat "${TEMP_DIR}/background.pid" 2>/dev/null) 2>/dev/null; then
-                if grep -q "分析完成" "${BACKGROUND_LOG}"; then
-                    echo -e "\n${GREEN}任务已完成${NC}"
-                    break
-                else
-                    echo -e "\n${RED}任务异常退出${NC}"
-                    break
-                fi
+            # 检查任务是否完成
+            if [[ $line == *"分析完成"* ]]; then
+                echo -e "\n${GREEN}任务已完成${NC}"
+                kill -TERM $$ # 结束 tail 进程
+                break
             fi
         done
         
@@ -1070,11 +1064,11 @@ show_background_menu() {
             1)  if [ -f "${BACKGROUND_LOG}" ]; then
                     log "ERROR" "已有后台任务在运行"
                 else
-                    # 修改这里的后台任务启动方式
-                    bash "$0" background > "${BACKGROUND_LOG}" 2>&1 &
+                    # 使用 nohup 确保后台任务不会被终止
+                    nohup bash "$0" background > "${BACKGROUND_LOG}" 2>&1 &
                     local pid=$!
                     echo $pid > "${TEMP_DIR}/background.pid"
-                    sleep 1  # 等待一秒确保进程启动
+                    sleep 2  # 等待确保进程启动
                     if kill -0 $pid 2>/dev/null; then
                         log "SUCCESS" "后台任务已启动，进程ID: $pid"
                     else
@@ -1082,10 +1076,12 @@ show_background_menu() {
                         rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
                     fi
                 fi
-                read -rp "按回车键继续..."
                 ;;
-            2)  check_background_task
-                read -rp "按回车键继续..."
+            2)  if [ -f "${BACKGROUND_LOG}" ]; then
+                    check_background_task
+                else
+                    log "WARN" "没有运行中的后台任务"
+                fi
                 ;;
             3)  if [ -f "${TEMP_DIR}/background.pid" ]; then
                     local pid=$(cat "${TEMP_DIR}/background.pid")
@@ -1100,13 +1096,13 @@ show_background_menu() {
                 else
                     log "WARN" "没有运行中的后台任务"
                 fi
-                read -rp "按回车键继续..."
                 ;;
             0)  break ;;
             *)  log "ERROR" "无效选择"
                 sleep 1
                 ;;
         esac
+        read -rp "按回车键继续..."
     done
 }
 
