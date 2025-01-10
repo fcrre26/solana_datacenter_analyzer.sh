@@ -113,22 +113,50 @@ install_solana_cli() {
     if ! command -v solana &>/dev/null; then
         log "INFO" "Solana CLI 未安装,开始安装..."
         
-        sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
-        export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
+        # 使用特定版本安装
+        local VERSION="v1.18.15"
+        sh -c "$(curl -sSfL https://release.solana.com/$VERSION/install)" || {
+            log "ERROR" "Solana CLI 下载失败"
+            return 1
+        }
         
+        # 配置环境变量
+        echo 'export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"' >> /root/.bashrc
+        export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
+        source /root/.bashrc
+        
+        # 验证安装
         if ! command -v solana &>/dev/null; then
             log "ERROR" "Solana CLI 安装失败"
             return 1
         fi
         
-        log "SUCCESS" "Solana CLI 安装成功"
+        # 显示版本信息
+        local version
+        version=$(solana --version)
+        log "INFO" "Solana CLI 版本: $version"
+        
+        # 配置 Solana CLI
         solana config set --url https://api.mainnet-beta.solana.com
+        if [ $? -ne 0 ]; then
+            log "ERROR" "Solana CLI 配置失败"
+            return 1
+        fi
+        
+        log "SUCCESS" "Solana CLI 安装成功"
     else
         log "INFO" "Solana CLI 已安装"
+        solana config set --url https://api.mainnet-beta.solana.com
     fi
+    
+    # 测试连接
+    if ! solana gossip 2>/dev/null; then
+        log "ERROR" "无法连接到 Solana 网络"
+        return 1
+    fi
+    
     return 0
 }
-
 # 检查后台任务状态
 check_background_task() {
     if [ -f "$LOCK_FILE" ]; then
