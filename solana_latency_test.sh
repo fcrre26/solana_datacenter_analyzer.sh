@@ -619,10 +619,12 @@ test_network_quality() {
     done
     
     if [ $success_count -gt 0 ]; then
-        # 修改这里，使用 printf 控制精度为3位
-        local avg_latency=$(printf "%.3f" $(echo "$total_time / $success_count" | bc -l))
-        # 如果结果小于100，去掉前导0
-        avg_latency=$(echo "$avg_latency" | sed 's/^0*//')
+        # 使用 bc 进行浮点数计算，并用 awk 格式化输出
+        local avg_latency=$(echo "scale=3; $total_time / $success_count" | bc | awk '{printf "%.3f", $0}')
+        # 如果结果小于100，确保不会有科学计数法表示
+        if (( $(echo "$avg_latency < 100" | bc -l) )); then
+            avg_latency=$(echo "$avg_latency" | awk '{printf "%.3f", $0}')
+        fi
         echo "$avg_latency"
         return 0
     fi
@@ -632,12 +634,13 @@ test_network_quality() {
         if curl -s -o /dev/null -w '%{time_total}\n' --connect-timeout 2 "http://$ip:8899" 2>/dev/null; then
             local curl_end=$(date +%s%N)
             local curl_duration=$(( (curl_end - curl_start) / 1000000 ))
+            # 格式化 curl 的结果
             printf "%.3f" "$curl_duration"
             return 0
         fi
     fi
     
-    echo "999"
+    echo "999.000"
     return 0
 }
 
