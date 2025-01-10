@@ -37,9 +37,6 @@ VERSION="v1.3.0"
 # 创建必要的目录
 mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
 
-# 创建必要的目录
-mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
-
 # [在这里添加新函数]
 # 检查依赖
 check_dependencies() {
