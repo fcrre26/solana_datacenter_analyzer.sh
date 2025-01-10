@@ -670,9 +670,14 @@ update_progress() {
     
     # 格式化延迟显示
     local latency_display
+    local latency_color=$GREEN
     if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        if [ "$(echo "$latency > 100" | bc -l)" -eq 1 ]; then
+            latency_color=$YELLOW
+        fi
         latency_display="${latency}ms"
     else
+        latency_color=$RED
         latency_display="超时"
     fi
     
