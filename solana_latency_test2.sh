@@ -11,6 +11,10 @@
 # 设置严格模式
 set -euo pipefail
 
+REPORT_DIR="$HOME/solana_reports"                    # 报告主目录
+LATEST_REPORT="${REPORT_DIR}/latest_report.txt"      # 最终分析报告
+DETAILED_LOG="${REPORT_DIR}/detailed_analysis.log"   # 详细分析日志（格式化的）
+
 # 设置环境变量
 SOLANA_INSTALL_DIR="/root/.local/share/solana/install"
 export PATH="$SOLANA_INSTALL_DIR/active_release/bin:$PATH"
@@ -646,7 +650,7 @@ get_validators() {
     return 0
 }
 
-# 更新进度显示
+# 更新进度显示函数
 update_progress() {
     local current="$1"
     local total="$2"
@@ -663,6 +667,23 @@ update_progress() {
     local time_per_item=$((elapsed_time / (current > 0 ? current : 1)))
     local remaining_items=$((total - current))
     local eta=$((time_per_item * remaining_items))
+    
+    # 格式化延迟显示
+    local latency_display
+    if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        latency_display="${latency}ms"
+    else
+        latency_display="超时"
+    fi
+    
+    # 保存格式化的分析记录
+    printf "%s | %-15s | %-8s | %-15s | %-30s | %d/%d\n" \
+        "$(date '+%H:%M:%S')" \
+        "$ip" \
+        "$latency_display" \
+        "${provider:0:15}" \
+        "${location:0:30}" \
+        "$current" "$total" >> "${DETAILED_LOG}"
     
     # 每20行显示一次进度条和表头
     if [ $((current % 20)) -eq 1 ]; then
@@ -683,22 +704,15 @@ update_progress() {
         printf "${WHITE}%-10s | %-15s | %-8s | %-15s | %-30s | %-15s${NC}\n" \
             "时间" "IP地址" "延迟" "供应商" "机房位置" "进度"
         printf "${WHITE}%s${NC}\n" "$(printf '=%.0s' {1..100})"
+        
+        # 在详细日志中也添加表头
+        echo "----------------------------------------" >> "${DETAILED_LOG}"
+        printf "%-10s | %-15s | %-8s | %-15s | %-30s | %-15s\n" \
+            "时间" "IP地址" "延迟" "供应商" "机房位置" "进度" >> "${DETAILED_LOG}"
+        echo "========================================" >> "${DETAILED_LOG}"
     fi
     
-    # 格式化延迟显示
-    local latency_display
-    local latency_color=$GREEN
-    if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        if [ "$(echo "$latency > 100" | bc -l)" -eq 1 ]; then
-            latency_color=$YELLOW
-        fi
-        latency_display="${latency}ms"
-    else
-        latency_color=$RED
-        latency_display="超时"
-    fi
-    
-    # 交替行颜色
+    # 显示当前行
     if [ $((current % 2)) -eq 0 ]; then
         printf "${GREEN}%-8s${NC} | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15.15s | %-30.30s | ${GREEN}%d/%d${NC}\n" \
             "$(date '+%H:%M:%S')" \
@@ -803,6 +817,14 @@ generate_report() {
 
 # 分析验证者节点
 analyze_validators() {
+    local background="${1:-false}"
+    local parallel="${2:-false}"
+    BACKGROUND_MODE="$background"
+    
+    log "INFO" "开始分析验证者节点分布"
+    
+    # 清理旧的日志文件
+    : > "${DETAILED_LOG}"
     local background="${1:-false}"
     local parallel="${2:-false}"
     BACKGROUND_MODE="$background"
