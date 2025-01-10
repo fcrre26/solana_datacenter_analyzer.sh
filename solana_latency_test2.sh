@@ -25,6 +25,17 @@ WHITE='\033[1;37m'      # 亮白色加粗
 GRAY='\033[0;37m'       # 灰色
 NC='\033[0m'            # 重置颜色
 
+# 在颜色定义之后添加
+# 确保目录和文件权限正确
+setup_directories() {
+    mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
+    chmod 755 "${TEMP_DIR}" "${REPORT_DIR}"
+    
+    # 确保日志文件存在且可写
+    touch "${LOG_FILE}" "${BACKGROUND_LOG}"
+    chmod 644 "${LOG_FILE}" "${BACKGROUND_LOG}"
+}
+
 # 标识符定义
 INFO="[INFO]"
 WARN="[WARN]"
@@ -977,89 +988,22 @@ show_background_menu() {
         read -r choice
 
         case $choice in
-            1)  if [ -f "${TEMP_DIR}/background.pid" ]; then
-                    log "ERROR" "已有后台任务在运行"
-                else
-                    log "INFO" "启动后台分析任务..."
-                    
-                    # 获取脚本的完整路径
-                    SCRIPT_PATH=$(readlink -f "$0")
-                    
-                    # 确保目录存在
-                    mkdir -p "${TEMP_DIR}"
-                    mkdir -p "$(dirname "${BACKGROUND_LOG}")"
-                    
-                    # 记录开始时间
-                    date +%s > "${TEMP_DIR}/start_time"
-                    
-                    # 使用 nohup 启动后台进程
-                    nohup bash "${SCRIPT_PATH}" background > "${BACKGROUND_LOG}" 2>&1 &
-                    local pid=$!
-                    
-                    # 等待确保进程启动
-                    sleep 2
-                    
-                    if kill -0 $pid 2>/dev/null; then
-                        echo $pid > "${TEMP_DIR}/background.pid"
-                        log "SUCCESS" "后台任务已启动，进程ID: $pid"
-                        log "INFO" "可以使用选项 2 监控任务进度"
+            1)  
+                if [ -f "${TEMP_DIR}/background.pid" ]; then
+                    if kill -0 "$(cat "${TEMP_DIR}/background.pid")" 2>/dev/null; then
+                        log "ERROR" "已有后台任务在运行"
                     else
-                        log "ERROR" "后台任务启动失败"
-                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
-                    fi
-                fi
-                ;;
-            2)  if [ -f "${BACKGROUND_LOG}" ]; then
-                    clear
-                    echo -e "\n${GREEN}正在监控后台任务 (按 Ctrl+C 退出监控)${NC}"
-                    echo -e "${GREEN}===================${NC}\n"
-                    tail -f "${BACKGROUND_LOG}"
-                else
-                    log "WARN" "没有运行中的后台任务"
-                fi
-                ;;
-            3)  if [ -f "${TEMP_DIR}/background.pid" ]; then
-                    local pid=$(cat "${TEMP_DIR}/background.pid")
-                    if kill -0 "$pid" 2>/dev/null; then
-                        kill "$pid"
-                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
-                        log "SUCCESS" "后台任务已停止"
-                    else
-                        log "WARN" "后台任务已不存在"
-                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
-                    fi
-                else
-                    log "WARN" "没有运行中的后台任务"
-                fi
-                ;;
-            4)  if [ -f "${TEMP_DIR}/background.pid" ]; then
-                    local pid=$(cat "${TEMP_DIR}/background.pid")
-                    if kill -0 "$pid" 2>/dev/null; then
-                        log "INFO" "后台任务正在运行 (PID: $pid)"
-                        if [ -f "${PROGRESS_FILE}" ]; then
-                            local progress=$(cat "${PROGRESS_FILE}")
-                            log "INFO" "当前进度: $progress"
-                        fi
-                        
-                        if [ -f "${BACKGROUND_LOG}" ]; then
-                            echo -e "\n最新日志:"
-                            tail -n 5 "${BACKGROUND_LOG}"
-                        fi
-                    else
-                        log "WARN" "后台任务已结束"
                         rm -f "${TEMP_DIR}/background.pid"
+                        start_background_task
                     fi
                 else
-                    log "INFO" "没有运行中的后台任务"
+                    start_background_task
                 fi
                 ;;
-            5)  if [ -f "${LATEST_REPORT}" ]; then
-                    clear
-                    cat "${LATEST_REPORT}"
-                else
-                    log "ERROR" "未找到分析报告"
-                fi
-                ;;
+            2)  monitor_background_task ;;
+            3)  stop_background_task ;;
+            4)  show_background_status ;;
+            5)  show_latest_report ;;
             0)  break ;;
             *)  log "ERROR" "无效选择"
                 sleep 1
@@ -1069,6 +1013,127 @@ show_background_menu() {
         [ "$choice" != "2" ] && read -rp "按回车键继续..."
     done
 }
+
+# 启动后台任务
+start_background_task() {
+    log "INFO" "启动后台分析任务..."
+    
+    # 获取脚本的完整路径
+    SCRIPT_PATH=$(readlink -f "$0")
+    
+    # 确保目录存在
+    mkdir -p "${TEMP_DIR}"
+    mkdir -p "$(dirname "${BACKGROUND_LOG}")"
+    
+    # 记录开始时间
+    date +%s > "${TEMP_DIR}/start_time"
+    
+    # 使用 nohup 启动后台进程
+    nohup bash "${SCRIPT_PATH}" background > "${BACKGROUND_LOG}" 2>&1 &
+    local pid=$!
+    
+    # 等待确保进程启动
+    sleep 2
+    
+    if kill -0 $pid 2>/dev/null; then
+        echo $pid > "${TEMP_DIR}/background.pid"
+        chmod 644 "${TEMP_DIR}/background.pid"
+        log "SUCCESS" "后台任务已启动，进程ID: $pid"
+        log "INFO" "可以使用选项 2 监控任务进度"
+    else
+        log "ERROR" "后台任务启动失败"
+        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+    fi
+}
+
+# 监控后台任务
+monitor_background_task() {
+    if [ ! -f "${BACKGROUND_LOG}" ]; then
+        log "WARN" "没有运行中的后台任务"
+        return
+    fi
+    
+    clear
+    echo -e "\n${GREEN}正在监控后台任务 (按 Ctrl+C 退出监控)${NC}"
+    echo -e "${GREEN}===================${NC}\n"
+    
+    # 使用 trap 捕获 Ctrl+C
+    trap 'echo -e "\n${GREEN}退出监控${NC}"; return' INT
+    
+    tail -f "${BACKGROUND_LOG}"
+    
+    # 重置 trap
+    trap - INT
+}
+
+# 停止后台任务
+stop_background_task() {
+    if [ ! -f "${TEMP_DIR}/background.pid" ]; then
+        log "WARN" "没有运行中的后台任务"
+        return
+    fi
+    
+    local pid=$(cat "${TEMP_DIR}/background.pid")
+    if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid"
+        sleep 1
+        
+        # 确保进程已经停止
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid"
+        fi
+        
+        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+        log "SUCCESS" "后台任务已停止"
+    else
+        log "WARN" "后台任务已不存在"
+        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+    fi
+}
+
+# 显示后台任务状态
+show_background_status() {
+    if [ ! -f "${TEMP_DIR}/background.pid" ]; then
+        log "INFO" "没有运行中的后台任务"
+        return
+    fi
+    
+    local pid=$(cat "${TEMP_DIR}/background.pid")
+    if kill -0 "$pid" 2>/dev/null; then
+        log "INFO" "后台任务正在运行 (PID: $pid)"
+        
+        if [ -f "${PROGRESS_FILE}" ]; then
+            local progress=$(cat "${PROGRESS_FILE}")
+            log "INFO" "当前进度: $progress"
+        fi
+        
+        if [ -f "${TEMP_DIR}/start_time" ]; then
+            local start_time=$(cat "${TEMP_DIR}/start_time")
+            local current_time=$(date +%s)
+            local runtime=$((current_time - start_time))
+            log "INFO" "运行时间: $((runtime / 3600))小时$((runtime % 3600 / 60))分钟$((runtime % 60))秒"
+        fi
+        
+        if [ -f "${BACKGROUND_LOG}" ]; then
+            echo -e "\n最新日志:"
+            tail -n 5 "${BACKGROUND_LOG}"
+        fi
+    else
+        log "WARN" "后台任务已结束"
+        rm -f "${TEMP_DIR}/background.pid"
+    fi
+}
+
+# 显示最新报告
+show_latest_report() {
+    if [ -f "${LATEST_REPORT}" ]; then
+        clear
+        cat "${LATEST_REPORT}"
+    else
+        log "ERROR" "未找到分析报告"
+    fi
+}
+
 
 # 配置菜单
 show_config_menu() {
@@ -1147,7 +1212,11 @@ main() {
         exit 1
     fi
     
+    # 添加这一行
+    setup_directories
+    
     if [ "$cmd" = "background" ]; then
+        BACKGROUND_MODE=true
         analyze_validators true true
         exit 0
     fi
