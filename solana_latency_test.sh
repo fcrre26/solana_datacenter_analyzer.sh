@@ -203,7 +203,8 @@ get_ip_info() {
     
     # 清理字符串函数
     clean_string() {
-        echo "$1" | tr -dc '[:print:]' | sed 's/["\]/\\&/g' | sed 's/[^a-zA-Z0-9.,_ -]//g'
+        local str="${1:-Unknown}"
+        echo "$str" | tr -dc '[:print:]' | sed 's/["\]/\\&/g' | sed 's/[^a-zA-Z0-9.,_ -]//g' || echo "Unknown"
     }
     
     while [ $retry_count -lt $max_retries ]; do
@@ -211,9 +212,17 @@ get_ip_info() {
         info=$(curl -s --max-time 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as")
         if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
             # 清理和转义数据
-            local org=$(echo "$info" | jq -r '.isp // .org // "Unknown"' | clean_string)
-            local city=$(echo "$info" | jq -r '.city // "Unknown"' | clean_string)
-            local country=$(echo "$info" | jq -r '.country // "Unknown"' | clean_string)
+            local org
+            local city
+            local country
+            
+            org=$(echo "$info" | jq -r '.isp // .org // "Unknown"' || echo "Unknown")
+            city=$(echo "$info" | jq -r '.city // "Unknown"' || echo "Unknown")
+            country=$(echo "$info" | jq -r '.country // "Unknown"' || echo "Unknown")
+            
+            org=$(clean_string "$org")
+            city=$(clean_string "$city")
+            country=$(clean_string "$country")
             
             # 构建地理位置字符串
             local location="${city}, ${country}"
@@ -233,9 +242,17 @@ get_ip_info() {
         info=$(curl -s --max-time 3 "https://ipinfo.io/${ip}/json")
         if [ -n "$info" ] && [ "$(echo "$info" | jq -r '.bogon // empty')" != "true" ]; then
             # 清理和转义数据
-            local org=$(echo "$info" | jq -r '.org // "Unknown"' | clean_string)
-            local city=$(echo "$info" | jq -r '.city // "Unknown"' | clean_string)
-            local country=$(echo "$info" | jq -r '.country // "Unknown"' | clean_string)
+            local org
+            local city
+            local country
+            
+            org=$(echo "$info" | jq -r '.org // "Unknown"' || echo "Unknown")
+            city=$(echo "$info" | jq -r '.city // "Unknown"' || echo "Unknown")
+            country=$(echo "$info" | jq -r '.country // "Unknown"' || echo "Unknown")
+            
+            org=$(clean_string "$org")
+            city=$(clean_string "$city")
+            country=$(clean_string "$country")
             
             # 构建地理位置字符串
             local location="${city}, ${country}"
