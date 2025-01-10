@@ -742,214 +742,194 @@ update_progress() {
 
 # 生成报告
 generate_report() {
-    log "INFO" "正在生成报告..."
+    log "INFO" "正在生成最终报告..."
     
+    local temp_report="${TEMP_DIR}/temp_report.txt"
+    
+    # 基础统计数据计算
     local total_nodes=$(wc -l < "${RESULTS_FILE}")
+    local valid_nodes=$(awk -F'|' '$4!=999 { count++ } END { print count }' "${RESULTS_FILE}")
     local avg_latency=$(awk -F'|' '$4!=999 { sum+=$4; count++ } END { if(count>0) printf "%.3f", sum/count }' "${RESULTS_FILE}")
-    local min_latency=$(sort -t'|' -k4 -n "${RESULTS_FILE}" | head -1 | cut -d'|' -f4)
-    local max_latency=$(sort -t'|' -k4 -n "${RESULTS_FILE}" | grep -v "999" | tail -1 | cut -d'|' -f4)
+    
+    # 获取最大供应商及其节点数
+    local max_provider_info=$(awk -F'|' '{
+        provider=$2
+        count[provider]++
+    } 
+    END {
+        max_count = 0
+        max_provider = ""
+        for (p in count) {
+            if (count[p] > max_count) {
+                max_count = count[p]
+                max_provider = p
+            }
+        }
+        printf "%s|%d", max_provider, max_count
+    }' "${RESULTS_FILE}")
+    
+    local max_provider=$(echo "$max_provider_info" | cut -d'|' -f1)
+    local max_provider_count=$(echo "$max_provider_info" | cut -d'|' -f2)
+    
+    # 获取该供应商最多的机房及其节点数
+    local max_dc_info=$(awk -F'|' -v provider="$max_provider" '{
+        if ($2 == provider) {
+            dc=$3
+            count[dc]++
+            regions[dc]=$5
+            latencies[dc]+=$4
+            if ($4 != "999") valid[dc]++
+        }
+    } 
+    END {
+        max_count = 0
+        max_dc = ""
+        max_region = ""
+        for (dc in count) {
+            if (count[dc] > max_count) {
+                max_count = count[dc]
+                max_dc = dc
+                max_region = regions[dc]
+            }
+        }
+        avg_latency = (valid[max_dc] > 0) ? latencies[max_dc]/valid[max_dc] : 999
+        printf "%s|%d|%s|%.2f", max_dc, max_count, max_region, avg_latency
+    }' "${RESULTS_FILE}")
+    
+    local max_dc=$(echo "$max_dc_info" | cut -d'|' -f1)
+    local max_dc_count=$(echo "$max_dc_info" | cut -d'|' -f2)
+    local max_dc_region=$(echo "$max_dc_info" | cut -d'|' -f3)
+    local max_dc_latency=$(echo "$max_dc_info" | cut -d'|' -f4)
     
     {
-        echo "# Solana 验证者节点延迟分析报告"
-        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "总节点数: ${total_nodes}"
-        echo "平均延迟: ${avg_latency}ms"
-        echo "最低延迟: ${min_latency}ms"
-        echo "最高延迟: ${max_latency}ms"
-        echo
-        echo "## 延迟统计 (Top 20 最佳节点)"
-        echo "| IP地址 | 延迟(ms) | 供应商 | 机房位置 | 区域代码 |"
-        echo "|--------|-----------|---------|----------|-----------|"
+        echo -e "${CYAN}================================================================${NC}"
+        echo -e "${GREEN}                Solana 验证者节点分布分析报告${NC}"
+        echo -e "${CYAN}================================================================${NC}\n"
         
-        sort -t'|' -k4 -n "${RESULTS_FILE}" | head -20 | while IFS='|' read -r ip provider location latency region; do
-            if [ "$latency" != "999" ]; then
-                printf "| %s | %.3f | %s | %s | %s |\n" "$ip" "$latency" "$provider" "$location" "$region"
-            fi
-        done
+        # 1. 供应商分布统计
+        echo -e "${WHITE}【供应商分布统计】${NC}"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
+        echo -e "主导供应商: ${GREEN}${max_provider}${NC}"
+        echo -e "节点数量: ${GREEN}${max_provider_count}${NC} (占比: ${GREEN}$(printf "%.1f" $((max_provider_count * 100 / total_nodes)))%${NC})"
+        echo -e "\n供应商排名 (Top 10):"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
+        printf "%-25s %-10s %-15s %-15s %-12s\n" "供应商" "节点数" "占比" "平均延迟" "可用率"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
         
-        echo
-        echo "## 供应商分布"
-        echo "| 供应商 | 节点数量 | 平均延迟(ms) |"
-        echo "|---------|-----------|--------------|"
-        
-        awk -F'|' '$4!=999 {
-            count[$2]++
-            latency_sum[$2]+=$4
+        awk -F'|' 'BEGIN {OFS="|"}
+        {
+            provider=$2
+            latency=$4
+            total[provider]++
+            if (latency != "999") {
+                valid[provider]++
+                sum[provider]+=latency
+            }
         }
         END {
-            for (provider in count) {
-                printf "| %s | %d | %.3f |\n", 
-                    provider, 
-                    count[provider], 
-                    latency_sum[provider]/count[provider]
+            for (p in total) {
+                if (valid[p] > 0) {
+                    printf "%-25s %-10d %-15.1f%% %-15.2f %-12.1f%%\n",
+                        substr(p,1,25),
+                        total[p],
+                        total[p]*100/NR,
+                        sum[p]/valid[p],
+                        valid[p]*100/total[p]
+                }
             }
-        }' "${RESULTS_FILE}" | sort -t'|' -k3 -n
+        }' "${RESULTS_FILE}" | sort -t' ' -k2 -nr | head -10
         
-        echo
-        echo "## 机房分布"
-        echo "| 机房位置 | 节点数量 | 平均延迟(ms) | 区域代码 |"
-        echo "|----------|-----------|--------------|-----------|"
+        # 2. 机房分布统计
+        echo -e "\n${WHITE}【机房分布统计】${NC}"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
+        echo -e "主要机房: ${GREEN}${max_dc}${NC}"
+        echo -e "所属供应商: ${GREEN}${max_provider}${NC}"
+        echo -e "区域: ${GREEN}${max_dc_region}${NC}"
+        echo -e "节点数量: ${GREEN}${max_dc_count}${NC} (占比: ${GREEN}$(printf "%.1f" $((max_dc_count * 100 / max_provider_count)))%${NC})"
+        echo -e "平均延迟: ${GREEN}${max_dc_latency}ms${NC}"
         
-        awk -F'|' '$4!=999 {
-            count[$3]++
-            latency_sum[$3]+=$4
-            region[$3]=$5
+        echo -e "\n机房排名 (Top 10):"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
+        printf "%-30s %-10s %-15s %-15s %-12s\n" "机房位置" "节点数" "占比" "平均延迟" "区域"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
+        
+        awk -F'|' 'BEGIN {OFS="|"}
+        {
+            dc=$3
+            provider=$2
+            latency=$4
+            region=$5
+            total[dc]++
+            regions[dc]=region
+            providers[dc]=provider
+            if (latency != "999") {
+                valid[dc]++
+                sum[dc]+=latency
+            }
         }
         END {
-            for (loc in count) {
-                printf "| %s | %d | %.3f | %s |\n", 
-                    loc, 
-                    count[loc], 
-                    latency_sum[loc]/count[loc],
-                    region[loc]
+            for (d in total) {
+                if (valid[d] > 0) {
+                    printf "%-30s %-10d %-15.1f%% %-15.2f %-12s\n",
+                        substr(d,1,30),
+                        total[d],
+                        total[d]*100/NR,
+                        sum[d]/valid[d],
+                        regions[d]
+                }
             }
-        }' "${RESULTS_FILE}" | sort -t'|' -k3 -n
+        }' "${RESULTS_FILE}" | sort -t' ' -k2 -nr | head -10
         
-        echo
-        echo "## 购买建议"
-        echo "1. 最佳选择（延迟 < 50ms）："
-        awk -F'|' '$4!=999 && $4<50 {
-            printf "   - %s (%s, 延迟: %.2fms)\n", $2, $3, $4
-        }' "${RESULTS_FILE}" | sort -u
+        # 3. 部署建议
+        echo -e "\n${WHITE}【最优部署建议】${NC}"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
+        echo -e "${GREEN}1. 推荐部署方案：${NC}"
+        echo -e "   主要部署点："
+        echo -e "   - 供应商: ${GREEN}${max_provider}${NC}"
+        echo -e "   - 机房: ${GREEN}${max_dc}${NC}"
+        echo -e "   - 区域: ${GREEN}${max_dc_region}${NC}"
+        echo -e "   - 平均延迟: ${GREEN}${max_dc_latency}ms${NC}"
         
-        echo
-        echo "2. 次佳选择（延迟 50-100ms）："
-        awk -F'|' '$4!=999 && $4>=50 && $4<100 {
-            printf "   - %s (%s, 延迟: %.2fms)\n", $2, $3, $4
-        }' "${RESULTS_FILE}" | sort -u
+        # 获取备选部署点（不同供应商的低延迟节点）
+        echo -e "\n   备选部署点："
+        awk -F'|' -v main_provider="$max_provider" '$2!=main_provider && $4!=999 {
+            dc=$3
+            provider=$2
+            latency=$4
+            region=$5
+            count[dc]++
+            providers[dc]=provider
+            regions[dc]=region
+            if (latency < min[dc] || min[dc] == "") min[dc]=latency
+            sum[dc]+=latency
+        }
+        END {
+            for (d in count) {
+                if (count[d] >= 3 && sum[d]/count[d] < 100) {
+                    printf "   - %s\n     供应商: %s\n     区域: %s\n     平均延迟: %.2fms\n     节点数: %d\n\n",
+                        d,
+                        providers[d],
+                        regions[d],
+                        sum[d]/count[d],
+                        count[d]
+                }
+            }
+        }' "${RESULTS_FILE}" | sort -t':' -k2 -n | head -3
         
-    } > "${LATEST_REPORT}"
-    
-    log "SUCCESS" "报告已生成: ${LATEST_REPORT}"
-}
-
-# 分析验证者节点
-analyze_validators() {
-    local background="${1:-false}"
-    local parallel="${2:-false}"
-    BACKGROUND_MODE="$background"
-    
-    log "INFO" "开始分析验证者节点分布"
-    
-    # 清理旧的日志文件
-    : > "${DETAILED_LOG}"
-    local background="${1:-false}"
-    local parallel="${2:-false}"
-    BACKGROUND_MODE="$background"
-    
-    log "INFO" "开始分析验证者节点分布"
-    log "INFO" "运行模式: $([ "$background" = "true" ] && echo "后台" || echo "前台")"
-    log "INFO" "处理模式: $([ "$parallel" = "true" ] && echo "并发" || echo "单线程")"
-    
-    if ! command -v solana >/dev/null 2>&1; then
-        log "ERROR" "Solana CLI 未安装或未正确配置"
-        return 1
-    fi
-    
-    # 获取验证者列表
-    local validator_ips
-    validator_ips=$(get_validators) || {
-        log "ERROR" "获取验证者信息失败"
-        return 1
-    }
-
-        # 创建临时目录和文件
-    mkdir -p "${TEMP_DIR}/results"
-    : > "${RESULTS_FILE}"
-    echo "$validator_ips" > "${TEMP_DIR}/tmp_ips.txt"
-    
-    local total=$(wc -l < "${TEMP_DIR}/tmp_ips.txt")
-    local current=0
-    START_TIME=$(date +%s)
-    
-    log "INFO" "找到 ${total} 个验证者节点"
-    
-    if [ "$parallel" = "true" ]; then
-        log "INFO" "使用 ${MAX_CONCURRENT_JOBS:-10} 个并发任务"
+        echo -e "${YELLOW}2. 部署策略建议：${NC}"
+        echo "   - 主要节点部署在 ${max_provider} 的 ${max_dc}"
+        echo "   - 建议选择2-3个备选机房作为容灾节点"
+        echo "   - 优先选择节点数量多、延迟低的机房"
+        echo "   - 建议跨供应商部署以提高可用性"
+        echo "   - 定期进行延迟测试和性能监控"
         
-        # 并发处理
-        local queue_size=${MAX_CONCURRENT_JOBS:-10}
-        local running=0
-        declare -A pids
-        
-        while IFS= read -r ip || [ -n "$ip" ]; do
-            # 等待有可用的槽位
-            while [ $running -ge $queue_size ]; do
-                for pid in "${!pids[@]}"; do
-                    if ! kill -0 "$pid" 2>/dev/null; then
-                        wait "$pid"
-                        unset pids["$pid"]
-                        ((running--))
-                        ((current++))
-                        echo "${current}/${total}" > "${PROGRESS_FILE}"
-                    fi
-                done
-                sleep 0.1
-            done
-            
-            # 启动新的分析任务
-            {
-                local latency=$(test_network_quality "$ip")
-                local ip_info=$(get_ip_info "$ip")
-                local provider_info=$(identify_provider \
-                    "$(echo "$ip_info" | jq -r '.org // "Unknown"')" \
-                    "$(echo "$ip_info" | jq -r '.location // "Unknown"')")
-                
-                local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
-                local region_code=$(echo "$provider_info" | cut -d'|' -f2)
-                local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
-                
-                echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "${RESULTS_FILE}"
-                
-                if [ "$background" = "false" ]; then
-                    update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
-                fi
-            } &
-            
-            pids[$!]=1
-            ((running++))
-            
-        done < "${TEMP_DIR}/tmp_ips.txt"
-        
-        # 等待所有任务完成
-        for pid in "${!pids[@]}"; do
-            wait "$pid"
-            ((current++))
-        done
-        
-    else
-        # 单线程处理
-        while IFS= read -r ip || [ -n "$ip" ]; do
-            ((current++))
-            
-            local latency=$(test_network_quality "$ip")
-            local ip_info=$(get_ip_info "$ip")
-            local provider_info=$(identify_provider \
-                "$(echo "$ip_info" | jq -r '.org // "Unknown"')" \
-                "$(echo "$ip_info" | jq -r '.location // "Unknown"')")
-            
-            local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
-            local region_code=$(echo "$provider_info" | cut -d'|' -f2)
-            local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
-            
-            echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "${RESULTS_FILE}"
-            
-            if [ "$background" = "false" ]; then
-                update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
-            fi
-            
-        done < "${TEMP_DIR}/tmp_ips.txt"
-    fi
+    } | tee "$temp_report"
     
-    generate_report
+    # 保存无颜色版本
+    sed 's/\x1b\[[0-9;]*m//g' "$temp_report" > "${LATEST_REPORT}"
+    rm -f "$temp_report"
     
-    if [ "$background" = "true" ]; then
-        log "SUCCESS" "后台分析完成！报告已生成: ${LATEST_REPORT}"
-    else
-        log "SUCCESS" "分析完成！报告已生成: ${LATEST_REPORT}"
-    fi
-    
-    return 0
+    log "SUCCESS" "最终报告已生成并保存至: ${LATEST_REPORT}"
 }
 
 # 测试单个IP
