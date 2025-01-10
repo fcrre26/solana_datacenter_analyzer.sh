@@ -1,11 +1,11 @@
 #!/bin/bash
 
+# 设置严格模式
+set -euo pipefail
+
 # 设置环境变量
 SOLANA_INSTALL_DIR="/root/.local/share/solana/install"
 export PATH="$SOLANA_INSTALL_DIR/active_release/bin:$PATH"
-
-# 启用严格模式
-set -eo pipefail
 
 # 颜色定义
 GREEN='\033[1;32m'      # 绿色加粗
@@ -14,6 +14,7 @@ YELLOW='\033[1;33m'     # 黄色加粗
 CYAN='\033[1;36m'       # 青色加粗
 BLUE='\033[1;34m'       # 蓝色加粗
 WHITE='\033[1;37m'      # 亮白色加粗
+GRAY='\033[0;37m'       # 灰色
 NC='\033[0m'            # 重置颜色
 
 # 标识符定义
@@ -32,78 +33,31 @@ BACKGROUND_LOG="${REPORT_DIR}/background.log"
 LOCK_FILE="/tmp/solana_dc_finder.lock"
 PROGRESS_FILE="${TEMP_DIR}/progress.txt"
 CONFIG_FILE="${REPORT_DIR}/config.conf"
-VERSION="v1.3.0"
+VERSION="v1.3.1"
 
 # 创建必要的目录
 mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
-
-# [在这里添加新函数]
-# 检查依赖
-check_dependencies() {
-    local deps=("curl" "nc" "whois" "awk" "sort" "jq" "geoip-bin")
-    local missing=()
-
-    for dep in "${deps[@]}"; do
-        if ! command -v "$dep" &>/dev/null; then
-            missing+=("$dep")
-        fi
-    done
-
-    if [ ${#missing[@]} -ne 0 ]; then
-        log "INFO" "正在安装必要工具: ${missing[*]}"
-        apt-get update -qq && apt-get install -y -qq "${missing[@]}" || {
-            log "ERROR" "工具安装失败"
-            return 1
-        }
-        
-        # 安装 GeoIP 数据库
-        apt-get install -y -qq geoip-database geoip-database-extra
-    fi
-    return 0
-}
-
-# 安装 Solana CLI
-install_solana_cli() {
-    if ! command -v solana &>/dev/null; then
-        log "INFO" "Solana CLI 未安装,开始安装..."
-        
-        mkdir -p "$SOLANA_INSTALL_DIR"
-        
-        local VERSION="v1.18.15"
-        local DOWNLOAD_URL="https://release.solana.com/$VERSION/solana-release-x86_64-unknown-linux-gnu.tar.bz2"
-        
-        curl -L "$DOWNLOAD_URL" | tar jxf - -C "$SOLANA_INSTALL_DIR" || {
-            log "ERROR" "Solana CLI 下载失败"
-            return 1
-        }
-        
-        rm -rf "$SOLANA_INSTALL_DIR/active_release"
-        ln -s "$SOLANA_INSTALL_DIR/solana-release" "$SOLANA_INSTALL_DIR/active_release"
-        
-        export PATH="$SOLANA_INSTALL_DIR/active_release/bin:$PATH"
-        
-        solana config set --url https://api.mainnet-beta.solana.com || {
-            log "ERROR" "Solana CLI 配置失败"
-            return 1
-        }
-        
-        log "SUCCESS" "Solana CLI 安装成功"
-    else
-        log "INFO" "Solana CLI 已安装"
-    fi
-    return 0
-}
 
 # 错误处理函数
 handle_error() {
     local exit_code=$?
     local line_number=$1
-    log "ERROR" "在第 ${line_number} 行发生错误，退出码: ${exit_code}"
+    local error_message=$2
+    
+    log "ERROR" "在第 ${line_number} 行发生错误: ${error_message}"
+    log "ERROR" "退出码: ${exit_code}"
+    
+    # 保存当前状态用于恢复
+    if [ -f "${PROGRESS_FILE}" ]; then
+        cp "${PROGRESS_FILE}" "${TEMP_DIR}/last_progress"
+    fi
+    
     cleanup
     exit 1
 }
 
-trap 'handle_error ${LINENO}' ERR
+# 使用新的错误处理
+trap 'handle_error ${LINENO} "${BASH_COMMAND}"' ERR
 
 # 清理函数
 cleanup() {
@@ -151,6 +105,105 @@ log() {
             *) echo -e "${message}" ;;
         esac
     fi
+}
+
+# 检查系统要求
+check_system_requirements() {
+    # 检查 fuser 命令是否可用
+    if ! command -v fuser >/dev/null 2>&1; then
+        log "INFO" "正在安装 psmisc..."
+        apt-get update -qq && apt-get install -y -qq psmisc || {
+            log "ERROR" "psmisc 安装失败"
+            return 1
+        }
+    fi
+    return 0
+}
+
+# 检查依赖
+check_dependencies() {
+    local deps=("curl" "nc" "whois" "awk" "sort" "jq" "geoip-bin")
+    local missing=()
+
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" &>/dev/null; then
+            missing+=("$dep")
+        fi
+    done
+
+    if [ ${#missing[@]} -ne 0 ]; then
+        log "INFO" "正在安装必要工具: ${missing[*]}"
+        
+        # 等待 apt 锁释放
+        local max_attempts=30  # 最多等待5分钟
+        local attempt=1
+        
+        while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+              fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+              fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+            
+            if [ $attempt -gt $max_attempts ]; then
+                log "ERROR" "等待 apt 锁超时，请稍后再试"
+                return 1
+            fi
+            
+            log "WARN" "系统正在进行更新，等待中... (${attempt}/${max_attempts})"
+            sleep 10
+            ((attempt++))
+        done
+        
+        # 尝试安装依赖
+        if ! apt-get update -qq; then
+            log "ERROR" "更新软件源失败"
+            return 1
+        fi
+        
+        if ! apt-get install -y -qq "${missing[@]}"; then
+            log "ERROR" "工具安装失败"
+            return 1
+        fi
+        
+        # 安装 GeoIP 数据库
+        if ! apt-get install -y -qq geoip-database geoip-database-extra; then
+            log "ERROR" "GeoIP 数据库安装失败"
+            return 1
+        fi
+        
+        log "SUCCESS" "工具安装完成"
+    fi
+    return 0
+}
+
+# 安装 Solana CLI
+install_solana_cli() {
+    if ! command -v solana &>/dev/null; then
+        log "INFO" "Solana CLI 未安装,开始安装..."
+        
+        mkdir -p "$SOLANA_INSTALL_DIR"
+        
+        local VERSION="v1.18.15"
+        local DOWNLOAD_URL="https://release.solana.com/$VERSION/solana-release-x86_64-unknown-linux-gnu.tar.bz2"
+        
+        curl -L "$DOWNLOAD_URL" | tar jxf - -C "$SOLANA_INSTALL_DIR" || {
+            log "ERROR" "Solana CLI 下载失败"
+            return 1
+        }
+        
+        rm -rf "$SOLANA_INSTALL_DIR/active_release"
+        ln -s "$SOLANA_INSTALL_DIR/solana-release" "$SOLANA_INSTALL_DIR/active_release"
+        
+        export PATH="$SOLANA_INSTALL_DIR/active_release/bin:$PATH"
+        
+        solana config set --url https://api.mainnet-beta.solana.com || {
+            log "ERROR" "Solana CLI 配置失败"
+            return 1
+        }
+        
+        log "SUCCESS" "Solana CLI 安装成功"
+    else
+        log "INFO" "Solana CLI 已安装"
+    fi
+    return 0
 }
 
 # 扩展机房位置字典
@@ -429,26 +482,36 @@ update_progress() {
     esac
     
     # 打印总进度（在顶部）
-printf "\n[" 
-printf "${GREEN}█%.0s${NC}" $(seq 1 $((progress * 40 / 100)))
-printf "${WHITE}░%.0s${NC}" $(seq 1 $((40 - progress * 40 / 100)))
-printf "] ${GREEN}%3d%%${NC} | 已测试: ${GREEN}%d${NC}/${WHITE}%d${NC} | 预计剩余: ${WHITE}%dm%ds${NC}\n" \
-    "$progress" "$current" "$total" \
-    $((eta / 60)) $((eta % 60))
+    printf "\n[" 
+    printf "${GREEN}█%.0s${NC}" $(seq 1 $((progress * 40 / 100)))
+    printf "${WHITE}░%.0s${NC}" $(seq 1 $((40 - progress * 40 / 100)))
+    printf "] ${GREEN}%3d%%${NC} | 已测试: ${GREEN}%d${NC}/${WHITE}%d${NC} | 预计剩余: ${WHITE}%dm%ds${NC}\n" \
+        "$progress" "$current" "$total" \
+        $((eta / 60)) $((eta % 60))
     
     # 格式化显示表头
-    printf "%-10s | %-15s | %-8s | %-15s | %-30s | %-15s\n" \
+    printf "${WHITE}%-10s | %-15s | %-8s | %-15s | %-30s | %-15s${NC}\n" \
         "时间" "IP地址" "延迟" "供应商" "机房位置" "进度"
-    printf "%s\n" "$(printf '=%.0s' {1..100})"
+    printf "${WHITE}%s${NC}\n" "$(printf '=%.0s' {1..100})"
     
     # 打印当前测试结果
-    printf "%s | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15s | ${WHITE}%-30s${NC} | ${GREEN}%d/%d${NC}\n" \
-        "$(date '+%H:%M:%S')" \
-        "$ip" \
-        "$latency_display" \
-        "$provider_display" \
-        "$location" \
-        "$current" "$total"
+    if [ $((current % 2)) -eq 0 ]; then
+        printf "${GREEN}%s | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15s | ${WHITE}%-30s${NC} | ${GREEN}%d/%d${NC}\n" \
+            "$(date '+%H:%M:%S')" \
+            "$ip" \
+            "$latency_display" \
+            "$provider_display" \
+            "$location" \
+            "$current" "$total"
+    else
+        printf "${WHITE}%s | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15s | ${WHITE}%-30s${NC} | ${GREEN}%d/%d${NC}\n" \
+            "$(date '+%H:%M:%S')" \
+            "$ip" \
+            "$latency_display" \
+            "$provider_display" \
+            "$location" \
+            "$current" "$total"
+    fi
 }
 
 # 获取验证者信息
@@ -473,7 +536,6 @@ get_validators() {
     return 0
 }
 
-# 在 analyze_validators_parallel 函数之前添加
 # 单线程分析验证者节点
 analyze_validators() {
     local background="${1:-false}"
@@ -557,6 +619,17 @@ analyze_validators_parallel() {
     mkdir -p "$tmp_result_dir"
     rm -f "${tmp_result_dir}"/*  # 清理旧的结果文件
     
+    # 创建信号量
+    local sem_file="${TEMP_DIR}/semaphore"
+    mkfifo "$sem_file"
+    exec 3<>"$sem_file"
+    rm "$sem_file"
+    
+    # 初始化信号量
+    for ((i=1; i<=max_jobs; i++)); do
+        printf "%s\n" "$i" >&3
+    done
+    
     # 定义结果处理函数
     process_results() {
         local result_file="$1"
@@ -576,13 +649,15 @@ analyze_validators_parallel() {
         # 清理临时结果文件
         rm -f "$result_file"
     }
-    
-    # 并发测试主循环
+
+        # 并发测试主循环
     while read -r ip; do
+        read -u 3 token  # 获取信号量
         ((current++))
-        local result_file="${tmp_result_dir}/${current}.result"
         
         {
+            local result_file="${tmp_result_dir}/${current}.result"
+            
             # 在后台执行测试，并将结果写入临时文件
             local latency=$(test_network_quality "$ip")
             local dc_info=$(identify_datacenter "$ip")
@@ -592,42 +667,24 @@ analyze_validators_parallel() {
             # 将结果写入临时文件
             echo "$latency $provider $location" > "$result_file"
             
-            # 发送完成信号
-            echo "$current $ip $result_file" >> "${TEMP_DIR}/completed_tests"
+            # 处理结果
+            process_results "$result_file" "$ip" "$current"
+            
+            # 释放信号量
+            printf "%s\n" "$token" >&3
+            
         } &
-        
-        # 控制并发数
-        while [ $(jobs -r | wc -l) -ge $max_jobs ]; do
-            # 检查是否有已完成的测试
-            if [ -f "${TEMP_DIR}/completed_tests" ]; then
-                while read -r completed_current completed_ip completed_result_file; do
-                    if [ -f "$completed_result_file" ]; then
-                        process_results "$completed_result_file" "$completed_ip" "$completed_current"
-                    fi
-                done < "${TEMP_DIR}/completed_tests"
-                : > "${TEMP_DIR}/completed_tests"  # 清空已处理的记录
-            fi
-            sleep 0.1
-        done
         
     done < "${TEMP_DIR}/tmp_ips.txt"
     
-    # 等待所有后台任务完成并处理剩余结果
-    while [ $(jobs -r | wc -l) -gt 0 ] || [ -s "${TEMP_DIR}/completed_tests" ]; do
-        if [ -f "${TEMP_DIR}/completed_tests" ]; then
-            while read -r completed_current completed_ip completed_result_file; do
-                if [ -f "$completed_result_file" ]; then
-                    process_results "$completed_result_file" "$completed_ip" "$completed_current"
-                fi
-            done < "${TEMP_DIR}/completed_tests"
-            : > "${TEMP_DIR}/completed_tests"
-        fi
-        sleep 0.1
-    done
+    # 等待所有后台任务完成
+    wait
+    
+    # 关闭信号量
+    exec 3>&-
     
     # 清理临时文件
     rm -rf "$tmp_result_dir"
-    rm -f "${TEMP_DIR}/completed_tests"
     
     echo "----------------------------------------"
     generate_report
@@ -661,10 +718,17 @@ generate_report() {
         echo "| IP地址          | 位置                  | 延迟(ms)   | 供应商               |"
         echo "|-----------------|----------------------|------------|---------------------|"
         
+        local line_num=0
         sort -t'|' -k4 -n "${RESULTS_FILE}" | head -20 | while IFS='|' read -r ip provider location latency; do
+            ((line_num++))
             if [ "$latency" != "999" ]; then
-                printf "| %-15s | %-20s | %-10s | %-20s |\n" \
-                    "$ip" "$location" "$latency" "$provider"
+                if [ $((line_num % 2)) -eq 0 ]; then
+                    printf "${GREEN}| %-15s | %-20s | %-10s | %-20s |${NC}\n" \
+                        "$ip" "$location" "$latency" "$provider"
+                else
+                    printf "${WHITE}| %-15s | %-20s | %-10s | %-20s |${NC}\n" \
+                        "$ip" "$location" "$latency" "$provider"
+                fi
             fi
         done
         
@@ -685,8 +749,8 @@ generate_report() {
                     latency_sum[provider]/count[provider]
             }
         }' "${RESULTS_FILE}" | sort -t'|' -k3 -n
-        
-        echo
+
+                echo
         echo -e "${GREEN}## 机房分布${NC}"
         echo "| 机房位置              | 节点数量    | 平均延迟(ms)    |"
         echo "|---------------------|------------|-----------------|"
@@ -704,8 +768,6 @@ generate_report() {
             }
         }' "${RESULTS_FILE}" | sort -t'|' -k3 -n
         
-        # ... 部署建议部分 ...
-        
     } > "${LATEST_REPORT}"
     
     log "SUCCESS" "报告已生成: ${LATEST_REPORT}"
@@ -721,11 +783,61 @@ show_menu() {
     echo -e "${GREEN}2. 并发分析所有节点 (推荐)${NC}"
     echo -e "${GREEN}3. 测试指定IP的延迟${NC}"
     echo -e "${GREEN}4. 查看最新分析报告${NC}"
-    echo -e "${GREEN}5. 查看后台任务状态${NC}"
+    echo -e "${GREEN}5. 后台任务管理${NC}"
     echo -e "${GREEN}6. 配置设置${NC}"
     echo -e "${RED}0. 退出程序${NC}"
     echo
     echo -ne "${GREEN}请输入您的选择 [0-6]: ${NC}"
+}
+
+# 后台任务管理菜单
+show_background_menu() {
+    while true; do
+        clear
+        echo -e "${GREEN}后台任务管理${NC}"
+        echo "==================="
+        echo -e "1. 启动后台并发分析"
+        echo -e "2. 查看后台任务状态"
+        echo -e "3. 停止后台任务"
+        echo -e "0. 返回主菜单"
+        echo
+        echo -ne "请选择 [0-3]: "
+        read -r choice
+
+        case $choice in
+            1)  if [ -f "${BACKGROUND_LOG}" ]; then
+                    log "ERROR" "已有后台任务在运行"
+                else
+                    nohup bash "$0" background > "${BACKGROUND_LOG}" 2>&1 &
+                    log "SUCCESS" "后台任务已启动，进程ID: $!"
+                    echo $! > "${TEMP_DIR}/background.pid"
+                fi
+                read -rp "按回车键继续..."
+                ;;
+            2)  check_background_task
+                read -rp "按回车键继续..."
+                ;;
+            3)  if [ -f "${TEMP_DIR}/background.pid" ]; then
+                    local pid=$(cat "${TEMP_DIR}/background.pid")
+                    if kill -0 "$pid" 2>/dev/null; then
+                        kill "$pid"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                        log "SUCCESS" "后台任务已停止"
+                    else
+                        log "WARN" "后台任务已不存在"
+                        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+                    fi
+                else
+                    log "WARN" "没有运行中的后台任务"
+                fi
+                read -rp "按回车键继续..."
+                ;;
+            0)  break ;;
+            *)  log "ERROR" "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 # 测试单个IP
@@ -754,109 +866,10 @@ test_single_ip() {
         latency="超时"
     fi
     
-    # 格式化供应商显示
-    local provider_display
-    case "$provider" in
-        *"Amazon"*|*"AWS"*)
-            provider_display="${CYAN}AWS${NC}"
-            ;;
-        *"Google"*|*"GCP"*)
-            provider_display="${YELLOW}GCP${NC}"
-            ;;
-        *"Alibaba"*|*"Aliyun"*)
-            provider_display="${RED}阿里云${NC}"
-            ;;
-        *"Microsoft"*|*"Azure"*)
-            provider_display="${BLUE}Azure${NC}"
-            ;;
-        *"Tencent"*)
-            provider_display="${GREEN}腾讯云${NC}"
-            ;;
-        *)
-            provider_display="${WHITE}${provider}${NC}"
-            ;;
-    esac
-    
     echo -e "延迟: ${latency_color}${latency}ms${NC}"
-    echo -e "供应商: ${provider_display}"
+    echo -e "供应商: ${provider}"
     echo -e "机房位置: ${WHITE}${location}${NC}"
     echo -e "${GREEN}===================${NC}"
-}
-
-# 检查后台任务状态
-check_background_task() {
-    if [ -f "${BACKGROUND_LOG}" ]; then
-        echo -e "\n${GREEN}后台任务状态：${NC}"
-        echo -e "${GREEN}===================${NC}"
-        
-        if grep -q "分析完成" "${BACKGROUND_LOG}"; then
-            echo -e "${GREEN}状态: 已完成${NC}"
-        else
-            echo -e "${YELLOW}状态: 运行中${NC}"
-        fi
-        
-        echo -e "\n最新进度:"
-        tail -n 5 "${BACKGROUND_LOG}"
-        echo -e "${GREEN}===================${NC}"
-    else
-        echo -e "\n${YELLOW}没有运行中的后台任务${NC}"
-    fi
-}
-
-# 配置设置菜单
-show_config_menu() {
-    while true; do
-        clear
-        echo -e "${GREEN}配置设置${NC}"
-        echo "==================="
-        echo -e "1. 最大并发数 (当前: ${MAX_CONCURRENT_JOBS})"
-        echo -e "2. 超时时间 (当前: ${TIMEOUT_SECONDS}秒)"
-        echo -e "3. 重试次数 (当前: ${RETRIES})"
-        echo -e "4. 测试端口 (当前: ${TEST_PORTS[*]})"
-        echo -e "5. 恢复默认设置"
-        echo -e "0. 返回主菜单"
-        echo
-        echo -ne "请选择 [0-5]: "
-        read -r choice
-        
-        case $choice in
-            1)  echo -ne "输入新的最大并发数 (1-50): "
-                read -r new_value
-                if [[ "$new_value" =~ ^[1-9][0-9]?$ ]] && [ "$new_value" -le 50 ]; then
-                    sed -i "s/MAX_CONCURRENT_JOBS=.*/MAX_CONCURRENT_JOBS=$new_value/" "${CONFIG_FILE}"
-                    load_config
-                fi
-                ;;
-            2)  echo -ne "输入新的超时时间 (秒): "
-                read -r new_value
-                if [[ "$new_value" =~ ^[1-9][0-9]?$ ]]; then
-                    sed -i "s/TIMEOUT_SECONDS=.*/TIMEOUT_SECONDS=$new_value/" "${CONFIG_FILE}"
-                    load_config
-                fi
-                ;;
-            3)  echo -ne "输入新的重试次数 (1-5): "
-                read -r new_value
-                if [[ "$new_value" =~ ^[1-5]$ ]]; then
-                    sed -i "s/RETRIES=.*/RETRIES=$new_value/" "${CONFIG_FILE}"
-                    load_config
-                fi
-                ;;
-            4)  echo -ne "输入测试端口 (空格分隔): "
-                read -r new_ports
-                if [[ "$new_ports" =~ ^[0-9\ ]+$ ]]; then
-                    sed -i "s/TEST_PORTS=.*/TEST_PORTS=(${new_ports})/" "${CONFIG_FILE}"
-                    load_config
-                fi
-                ;;
-            5)  create_default_config
-                load_config
-                echo "已恢复默认设置"
-                sleep 1
-                ;;
-            0)  break ;;
-            *)  echo "无效选择" ;;
-        esac
-    done
 }
 
 # 主函数
@@ -918,8 +931,7 @@ main() {
                 fi
                 read -rp "按回车键继续..."
                 ;;
-            5)  check_background_task
-                read -rp "按回车键继续..."
+            5)  show_background_menu
                 ;;
             6)  show_config_menu
                 ;;
