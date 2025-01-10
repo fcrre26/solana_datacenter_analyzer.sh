@@ -210,6 +210,7 @@ install_solana_cli() {
 }
 
 # 修改 get_ip_info 函数
+# 获取IP信息
 get_ip_info() {
     local ip="$1"
     local max_retries=3
@@ -218,13 +219,16 @@ get_ip_info() {
     # 清理字符串函数
     clean_string() {
         local str="${1:-}"
-        [ -z "$str" ] && return 1
+        [ -z "$str" ] && echo "Unknown" && return 0
         echo "$str" | tr -dc '[:print:]' | sed 's/["\]/\\&/g' | sed 's/[^a-zA-Z0-9.,_ -]//g' || echo "Unknown"
     }
     
     # 验证 JSON 响应
     validate_json() {
         local json="$1"
+        if [ -z "$json" ]; then
+            return 1
+        fi
         if echo "$json" | jq -e . >/dev/null 2>&1; then
             return 0
         fi
@@ -237,8 +241,8 @@ get_ip_info() {
         local info=""
         
         # 尝试 ip-api.com
-        info=$(curl -s -m 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as")
-        if [ -n "$info" ] && validate_json "$info" && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
+        info=$(curl -s -m 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as" 2>/dev/null)
+        if validate_json "$info" && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
             local as=$(echo "$info" | jq -r '.as // empty')
             local isp=$(echo "$info" | jq -r '.isp // empty')
             local org=$(echo "$info" | jq -r '.org // empty')
@@ -256,8 +260,8 @@ get_ip_info() {
         fi
         
         # 尝试 ipinfo.io
-        info=$(curl -s -m 3 "https://ipinfo.io/${ip}/json")
-        if [ -n "$info" ] && validate_json "$info" && [ "$(echo "$info" | jq -r '.bogon // empty')" != "true" ]; then
+        info=$(curl -s -m 3 "https://ipinfo.io/${ip}/json" 2>/dev/null)
+        if validate_json "$info" && [ "$(echo "$info" | jq -r '.bogon // empty')" != "true" ]; then
             local asn=$(echo "$info" | jq -r '.asn // empty')
             local org=$(echo "$info" | jq -r '.org // empty')
             
@@ -271,8 +275,8 @@ get_ip_info() {
         fi
         
         # 尝试 ipapi.co
-        info=$(curl -s -m 3 "https://ipapi.co/${ip}/json/")
-        if [ -n "$info" ] && validate_json "$info" ]; then
+        info=$(curl -s -m 3 "https://ipapi.co/${ip}/json/" 2>/dev/null)
+        if validate_json "$info"; then
             local org=$(echo "$info" | jq -r '.org // empty')
             local asn=$(echo "$info" | jq -r '.asn // empty')
             
@@ -295,8 +299,8 @@ get_ip_info() {
         local info=""
         
         # 尝试 ip-api.com
-        info=$(curl -s -m 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city")
-        if [ -n "$info" ] && validate_json "$info" && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
+        info=$(curl -s -m 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city" 2>/dev/null)
+        if validate_json "$info" && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
             local city=$(echo "$info" | jq -r '.city // empty')
             local country=$(echo "$info" | jq -r '.country // empty')
             
@@ -313,8 +317,8 @@ get_ip_info() {
         fi
         
         # 尝试 ipinfo.io
-        info=$(curl -s -m 3 "https://ipinfo.io/${ip}/json")
-        if [ -n "$info" ] && validate_json "$info" && [ "$(echo "$info" | jq -r '.bogon // empty')" != "true" ]; then
+        info=$(curl -s -m 3 "https://ipinfo.io/${ip}/json" 2>/dev/null)
+        if validate_json "$info" && [ "$(echo "$info" | jq -r '.bogon // empty')" != "true" ]; then
             local city=$(echo "$info" | jq -r '.city // empty')
             local region=$(echo "$info" | jq -r '.region // empty')
             local country=$(echo "$info" | jq -r '.country // empty')
@@ -334,6 +338,23 @@ get_ip_info() {
         echo "Unknown"
         return 0
     }
+    
+    # 获取供应商信息
+    local provider
+    provider=$(get_provider_info "$ip")
+    provider=$(clean_string "${provider:-Unknown}")
+    
+    # 获取位置信息
+    local location
+    location=$(get_location_info "$ip")
+    location=$(clean_string "${location:-Unknown}")
+    
+    # 返回结果
+    printf '{"ip":"%s","org":"%s","location":"%s"}' \
+          "$ip" \
+          "${provider}" \
+          "${location}"
+}
     
     # 获取供应商信息
     local provider
