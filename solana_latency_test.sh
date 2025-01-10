@@ -633,4 +633,76 @@ run_background_analysis() {
 
     local pid=$!
     log "SUCCESS" "后台分析任务已启动 (PID: $pid)"
-    echo
+    echo -e "\n您可以通过以下方式查看进度："
+    echo "1. 使用命令: tail -f ${BACKGROUND_LOG}"
+    echo "2. 在主菜单选择'3'进入报告管理"
+    echo "3. 在报告管理中选择'5'查看任务状态"
+    echo "4. 使用命令: ps aux | grep solana_dc_finder"
+    echo -e "\n按回车键返回主菜单..."
+    read -r
+}
+
+# 主函数
+main() {
+    if [ "$EUID" -ne 0 ]; then 
+        log "ERROR" "请使用root权限运行此脚本"
+        exit 1
+    fi
+    
+    trap 'echo -e "\n${RED}程序被中断${NC}"; cleanup; exit 1' INT TERM
+    trap cleanup EXIT
+    
+    if [ -f "$LOCK_FILE" ]; then
+        log "ERROR" "程序已在运行中"
+        exit 1
+    fi
+    
+    check_dependencies || exit 1
+    install_solana_cli || exit 1
+    
+    while true; do
+        clear
+        echo -e "\n${BLUE}Solana 验证者节点位置分析工具 ${VERSION}${NC}"
+        echo "=================================="
+        echo "1. 开始分析验证者节点分布"
+        echo "2. 在后台运行分析"
+        echo "3. 报告管理"
+        echo "4. 测试指定IP的数据中心位置"
+        echo "5. 查看后台任务状态"
+        echo "0. 退出"
+        echo "=================================="
+        echo -ne "请选择操作 [0-5]: "
+        
+        read -r choice
+        case $choice in
+            1) analyze_validators ;;
+            2) run_background_analysis ;;
+            3) manage_reports ;;
+            4) read -rp "请输入要测试的IP地址: " test_ip
+               if [[ $test_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                   dc_info=$(identify_datacenter "$test_ip")
+                   echo -e "\n数据中心信息: $dc_info"
+                   network_stats=$(test_network_quality "$test_ip")
+                   echo "网络延迟: $(echo "$network_stats" | cut -d'|' -f2) ms"
+               else
+                   log "ERROR" "无效的IP地址"
+               fi
+               read -rp "按回车键继续..." ;;
+            5) check_background_task
+               read -rp "按回车键继续..." ;;
+            0) log "INFO" "感谢使用！"
+               exit 0 ;;
+            *) log "ERROR" "无效选择，请重试"
+               sleep 1 ;;
+        esac
+    done
+}
+
+# 启动程序
+if [ "${BACKGROUND_TASK}" = "--background-task" ]; then
+    analyze_validators
+    generate_report "${LATEST_REPORT}"
+    backup_data
+else
+    main "$@"
+fi
