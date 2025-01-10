@@ -733,12 +733,7 @@ show_menu() {
     echo
     echo -ne "${GREEN}请输入您的选择 [0-6]: ${NC}"
 }
-   
-    # 重新加载配置
-    load_config
-}
-
-
+ 
 # 后台任务管理菜单
 show_background_menu() {
     while true; do
