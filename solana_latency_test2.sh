@@ -15,6 +15,9 @@ REPORT_DIR="$HOME/solana_reports"                    # 报告主目录
 LATEST_REPORT="${REPORT_DIR}/latest_report.txt"      # 最终分析报告
 DETAILED_LOG="${REPORT_DIR}/detailed_analysis.log"   # 详细分析日志（格式化的）
 
+# API 配置
+API_CONFIG_FILE="${REPORT_DIR}/api_keys.conf"
+
 # 设置环境变量
 SOLANA_INSTALL_DIR="/root/.local/share/solana/install"
 export PATH="$SOLANA_INSTALL_DIR/active_release/bin:$PATH"
@@ -87,6 +90,119 @@ cleanup() {
     rm -f "$LOCK_FILE"
     rm -f "${TEMP_DIR}/completed_tests"
     rm -rf "${TEMP_DIR}/results"
+}
+
+# 初始化 API 配置文件
+init_api_config() {
+    if [ ! -f "${API_CONFIG_FILE}" ]; then
+        cat > "${API_CONFIG_FILE}" <<EOF
+# API Keys Configuration
+IPINFO_API_KEY=""
+EOF
+    fi
+    
+    # 加载配置
+    source "${API_CONFIG_FILE}"
+}
+
+# API key 管理菜单
+manage_api_keys() {
+    while true; do
+        clear
+        echo -e "${GREEN}API Key 管理${NC}"
+        echo "==================="
+        echo -e "当前 API Key 状态："
+        
+        # 检查 IPINFO API key
+        if [ -n "${IPINFO_API_KEY}" ]; then
+            echo -e "IPInfo API Key: ${GREEN}已配置${NC}"
+        else
+            echo -e "IPInfo API Key: ${RED}未配置${NC}"
+        fi
+        
+        echo
+        echo -e "1. 设置 IPInfo API Key"
+        echo -e "2. 测试 API Key"
+        echo -e "3. 清除 API Key"
+        echo -e "0. 返回上级菜单"
+        echo
+        echo -ne "请选择 [0-3]: "
+        read -r choice
+        
+        case $choice in
+            1)  echo -ne "\n请输入 IPInfo API Key: "
+                read -r api_key
+                if [ -n "$api_key" ]; then
+                    # 测试 API key 是否有效
+                    local test_response=$(curl -s -m 5 \
+                        -H "Authorization: Bearer $api_key" \
+                        "https://ipinfo.io/8.8.8.8/json")
+                    
+                    if echo "$test_response" | jq -e . >/dev/null 2>&1; then
+                        # 更新配置文件
+                        sed -i "s/IPINFO_API_KEY=.*/IPINFO_API_KEY=\"$api_key\"/" "${API_CONFIG_FILE}"
+                        source "${API_CONFIG_FILE}"
+                        log "SUCCESS" "API Key 设置成功！"
+                    else
+                        log "ERROR" "无效的 API Key"
+                    fi
+                else
+                    log "ERROR" "API Key 不能为空"
+                fi
+                ;;
+                
+            2)  if [ -n "${IPINFO_API_KEY}" ]; then
+                    echo -e "\n正在测试 API Key..."
+                    local test_response=$(curl -s -m 5 \
+                        -H "Authorization: Bearer ${IPINFO_API_KEY}" \
+                        "https://ipinfo.io/8.8.8.8/json")
+                    
+                    if echo "$test_response" | jq -e . >/dev/null 2>&1; then
+                        local quota=$(curl -s -m 5 \
+                            -H "Authorization: Bearer ${IPINFO_API_KEY}" \
+                            "https://ipinfo.io/api/usage")
+                        
+                        echo -e "\nAPI Key 状态: ${GREEN}有效${NC}"
+                        echo "配额信息："
+                        echo "$quota" | jq -r '.[] | select(.[] != null) | keys[] as $k | "  \($k): \(.[$k])"'
+                    else
+                        echo -e "\nAPI Key 状态: ${RED}无效${NC}"
+                    fi
+                else
+                    log "ERROR" "未配置 API Key"
+                fi
+                ;;
+                
+            3)  if [ -n "${IPINFO_API_KEY}" ]; then
+                    echo -ne "\n确定要清除 API Key 吗？[y/N] "
+                    read -r confirm
+                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                        sed -i "s/IPINFO_API_KEY=.*/IPINFO_API_KEY=\"\"/" "${API_CONFIG_FILE}"
+                        IPINFO_API_KEY=""
+                        log "SUCCESS" "API Key 已清除"
+                    fi
+                else
+                    log "WARN" "当前未配置 API Key"
+                fi
+                ;;
+                
+            0)  break ;;
+            *)  log "ERROR" "无效选择" ;;
+        esac
+        
+        read -rp "按回车键继续..."
+    done
+}
+
+# 检查 API key
+check_api_key() {
+    if [ -z "${IPINFO_API_KEY}" ]; then
+        log "WARN" "未配置 IPInfo API Key，将使用有限的 IP 信息源"
+        read -rp "是否现在配置 API Key？[y/N] " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            manage_api_keys
+        fi
+    fi
 }
 
 # 创建默认配置文件
@@ -430,86 +546,96 @@ get_ip_info() {
         echo "$str" | tr -dc '[:print:]' | sed 's/["\]/\\&/g' | sed 's/[^a-zA-Z0-9.,_ -]//g'
     }
     
+    # 验证 JSON 格式
+    validate_json() {
+        local data="$1"
+        if [ -z "$data" ]; then
+            return 1
+        fi
+        if ! echo "$data" | jq . >/dev/null 2>&1; then
+            return 1
+        fi
+        return 0
+    }
+    
     # 尝试从 API 获取信息
     get_info_from_apis() {
         local ip="$1"
+        local response=""
+        local json_data=""
         
-        # 1. ipapi.co
-        local info=$(curl -s -m 3 "https://ipapi.co/${ip}/json/")
-        if [ $? -eq 0 ] && [ "$(echo "$info" | jq -r '.error // empty')" != "true" ]; then
-            local org=$(echo "$info" | jq -r '.org // empty')
-            local asn=$(echo "$info" | jq -r '.asn // empty')
-            local city=$(echo "$info" | jq -r '.city // empty')
-            local country=$(echo "$info" | jq -r '.country_name // empty')
+        # 1. 使用 IPInfo API (如果配置了 API key)
+        if [ -n "${IPINFO_API_KEY}" ]; then
+            response=$(curl -s -m 3 \
+                -H "Authorization: Bearer ${IPINFO_API_KEY}" \
+                "https://ipinfo.io/${ip}/json")
             
-            if [ -n "$org" ] || [ -n "$asn" ]; then
-                local provider="${org:-$asn}"
+            if [ $? -eq 0 ] && validate_json "$response"; then
+                local org=$(echo "$response" | jq -r '.org // empty')
+                local city=$(echo "$response" | jq -r '.city // empty')
+                local country=$(echo "$response" | jq -r '.country // empty')
+                
+                if [ -n "$org" ]; then
+                    local location="${city:+$city, }${country}"
+                    if [ -n "$location" ]; then
+                        json_data="{\"provider\":\"$(clean_string "$org")\",\"location\":\"$(clean_string "$location")\"}"
+                        if validate_json "$json_data"; then
+                            echo "$json_data"
+                            return 0
+                        fi
+                    fi
+                fi
+            fi
+        fi
+        
+        # 2. ipapi.co (备用 API)
+        response=$(curl -s -m 3 "https://ipapi.co/${ip}/json/")
+        if [ $? -eq 0 ] && validate_json "$response"; then
+            if [ "$(echo "$response" | jq -r '.error // empty')" != "true" ]; then
+                local org=$(echo "$response" | jq -r '.org // empty')
+                local asn=$(echo "$response" | jq -r '.asn // empty')
+                local city=$(echo "$response" | jq -r '.city // empty')
+                local country=$(echo "$response" | jq -r '.country_name // empty')
+                
+                if [ -n "$org" ] || [ -n "$asn" ]; then
+                    local provider="${org:-$asn}"
+                    local location="${city:+$city, }${country}"
+                    if [ -n "$provider" ] && [ -n "$location" ]; then
+                        json_data="{\"provider\":\"$(clean_string "$provider")\",\"location\":\"$(clean_string "$location")\"}"
+                        if validate_json "$json_data"; then
+                            echo "$json_data"
+                            return 0
+                        fi
+                    fi
+                fi
+            fi
+        fi
+        
+        # 3. ip-api.com (备用 API)
+        response=$(curl -s -m 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as")
+        if [ $? -eq 0 ] && validate_json "$response"; then
+            if [ "$(echo "$response" | jq -r '.status // empty')" = "success" ]; then
+                local org=$(echo "$response" | jq -r '.org // empty')
+                local isp=$(echo "$response" | jq -r '.isp // empty')
+                local as=$(echo "$response" | jq -r '.as // empty')
+                local city=$(echo "$response" | jq -r '.city // empty')
+                local country=$(echo "$response" | jq -r '.country // empty')
+                
+                local provider=""
+                [ -n "$as" ] && provider="${as#AS*} "
+                [ -n "$org" ] && provider+="$org"
+                [ -z "$provider" ] && [ -n "$isp" ] && provider="$isp"
+                
                 local location="${city:+$city, }${country}"
-                [ -n "$provider" ] && [ -n "$location" ] && \
-                    echo "{\"provider\":\"$provider\",\"location\":\"$location\"}" && return 0
+                if [ -n "$provider" ] && [ -n "$location" ]; then
+                    json_data="{\"provider\":\"$(clean_string "$provider")\",\"location\":\"$(clean_string "$location")\"}"
+                    if validate_json "$json_data"; then
+                        echo "$json_data"
+                        return 0
+                    fi
+                fi
             fi
         fi
-        
-        # 2. ip-api.com
-        info=$(curl -s -m 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as")
-        if [ $? -eq 0 ] && [ "$(echo "$info" | jq -r '.status // empty')" = "success" ]; then
-            local org=$(echo "$info" | jq -r '.org // empty')
-            local isp=$(echo "$info" | jq -r '.isp // empty')
-            local as=$(echo "$info" | jq -r '.as // empty')
-            local city=$(echo "$info" | jq -r '.city // empty')
-            local country=$(echo "$info" | jq -r '.country // empty')
-            
-            local provider=""
-            [ -n "$as" ] && provider="${as#AS*} "
-            [ -n "$org" ] && provider+="$org"
-            [ -z "$provider" ] && [ -n "$isp" ] && provider="$isp"
-            
-            local location="${city:+$city, }${country}"
-            [ -n "$provider" ] && [ -n "$location" ] && \
-                echo "{\"provider\":\"$provider\",\"location\":\"$location\"}" && return 0
-        fi
-        
-        return 1
-    }
-    
-    # 从数据库查询 IP 所属服务商
-    query_ip_provider() {
-        local ip="$1"
-        
-        # 检查数据库是否需要更新
-        local current_time=$(date +%s)
-        local last_update=0
-        [ -f "${IP_DB_LAST_UPDATE}" ] && last_update=$(cat "${IP_DB_LAST_UPDATE}")
-        
-        if [ $((current_time - last_update)) -gt 604800 ]; then  # 7天更新一次
-            update_ip_database
-        fi
-        
-        # 查询 IP
-        while IFS='|' read -r provider range; do
-            [[ "$provider" =~ ^#|^$ ]] && continue
-            
-            if check_ip_in_range "$ip" "$range"; then
-                case "$provider" in
-                    "AWS") echo '{"provider":"Amazon AWS","location":"Global"}' ;;
-                    "AZURE") echo '{"provider":"Microsoft Azure","location":"Global"}' ;;
-                    "GCP") echo '{"provider":"Google Cloud","location":"Global"}' ;;
-                    "ORACLE") echo '{"provider":"Oracle Cloud","location":"Global"}' ;;
-                    "ALICLOUD") echo '{"provider":"Alibaba Cloud","location":"Global"}' ;;
-                    "TENCENT") echo '{"provider":"Tencent Cloud","location":"Global"}' ;;
-                    "HUAWEI") echo '{"provider":"Huawei Cloud","location":"Global"}' ;;
-                    "DO") echo '{"provider":"DigitalOcean","location":"Global"}' ;;
-                    "VULTR") echo '{"provider":"Vultr","location":"Global"}' ;;
-                    "LINODE") echo '{"provider":"Linode","location":"Global"}' ;;
-                    "OVH") echo '{"provider":"OVH","location":"Global"}' ;;
-                    "HETZNER") echo '{"provider":"Hetzner","location":"Global"}' ;;
-                    "CLOUDFLARE") echo '{"provider":"Cloudflare","location":"Global"}' ;;
-                    "FASTLY") echo '{"provider":"Fastly","location":"Global"}' ;;
-                    *) echo '{"provider":"Unknown Provider","location":"Unknown Location"}' ;;
-                esac
-                return 0
-            fi
-        done < "$IP_DB_FILE"
         
         return 1
     }
@@ -518,7 +644,7 @@ get_ip_info() {
     while [ $retry_count -lt $max_retries ]; do
         # 首先尝试 API
         local result=$(get_info_from_apis "$ip")
-        if [ $? -eq 0 ] && [ -n "$result" ]; then
+        if [ $? -eq 0 ] && [ -n "$result" ] && validate_json "$result"; then
             echo "$result" > "$cache_file"
             echo "$result"
             return 0
@@ -526,7 +652,7 @@ get_ip_info() {
         
         # 如果 API 失败，尝试数据库查询
         result=$(query_ip_provider "$ip")
-        if [ $? -eq 0 ] && [ -n "$result" ]; then
+        if [ $? -eq 0 ] && [ -n "$result" ] && validate_json "$result"; then
             echo "$result" > "$cache_file"
             echo "$result"
             return 0
@@ -542,7 +668,6 @@ get_ip_info() {
     echo "$default_result"
     return 0
 }
-
 # 初始化数据库
 init_ip_db
 
@@ -1188,10 +1313,12 @@ show_menu() {
     echo -e "${GREEN}4. 查看最新分析报告${NC}"
     echo -e "${GREEN}5. 后台任务管理${NC}"
     echo -e "${GREEN}6. 配置设置${NC}"
+    echo -e "${GREEN}7. API Key 管理${NC}"  # 新增选项
     echo -e "${RED}0. 退出程序${NC}"
     echo
-    echo -ne "${GREEN}请输入您的选择 [0-6]: ${NC}"
+    echo -ne "${GREEN}请输入您的选择 [0-7]: ${NC}"
 }
+
 # 启动后台分析任务
 start_background_analysis() {
     if [ -f "${TEMP_DIR}/background.pid" ]; then
@@ -1550,7 +1677,7 @@ main() {
         exit 1
     fi
     
-    # 添加这一行
+    # 设置目录
     setup_directories
     
     if [ "$cmd" = "background" ]; then
@@ -1571,18 +1698,21 @@ main() {
     check_dependencies || exit 1
     install_solana_cli || exit 1
     load_config
+    init_api_config  # 添加 API 配置初始化
     
     while true; do
         show_menu
         read -r choice
         
         case $choice in
-            1)  analyze_validators false false || {
+            1)  check_api_key  # 添加 API key 检查
+                analyze_validators false false || {
                     log "ERROR" "分析失败"
                     read -rp "按回车键继续..."
                 }
                 ;;
-            2)  analyze_validators false true || {
+            2)  check_api_key  # 添加 API key 检查
+                analyze_validators false true || {
                     log "ERROR" "并发分析失败"
                     read -rp "按回车键继续..."
                 }
@@ -1608,6 +1738,8 @@ main() {
                 ;;
             6)  show_config_menu
                 ;;
+            7)  manage_api_keys  # 添加 API key 管理选项
+                ;;
             0)  log "INFO" "感谢使用！"
                 exit 0
                 ;;
@@ -1620,4 +1752,4 @@ main() {
 
 # 启动程序
 main "$@"
-        
+
