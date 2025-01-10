@@ -293,113 +293,246 @@ test_network_quality() {
 
 # 供应商识别函数
 identify_provider() {
-    local provider="$1"
-    local location="$2"
+    local provider="$1"   # 供应商名称
+    local location="$2"   # 地理位置信息
     
     # 初始化返回值
     local cloud_provider=""
     local region_code=""
     local datacenter=""
     
-    # 识别主要云服务商和数据中心
-    case "$provider" in
-        *"Amazon"*|*"AWS"*|*"AMAZON"*)
-            cloud_provider="AWS"
-            case "$location" in
-                *"Tokyo"*|*"Japan"*)          region_code="ap-northeast-1"; datacenter="东京数据中心" ;;
-                *"Singapore"*)                 region_code="ap-southeast-1"; datacenter="新加坡数据中心" ;;
-                *"Hong Kong"*)                 region_code="ap-east-1"; datacenter="香港数据中心" ;;
-                *"Seoul"*|*"Korea"*)          region_code="ap-northeast-2"; datacenter="首尔数据中心" ;;
-                *"Sydney"*|*"Australia"*)     region_code="ap-southeast-2"; datacenter="悉尼数据中心" ;;
-                *"Mumbai"*|*"India"*)         region_code="ap-south-1"; datacenter="孟买数据中心" ;;
-                *) datacenter="$location" ;;
-            esac
-            ;;
+    # AWS
+    if [[ "$provider" =~ Amazon|AWS|AMAZON|EC2|AMAZONAWS ]]; then
+        cloud_provider="AWS"
+        case "$location" in
+            # 亚太地区
+            *"Tokyo"*|*"Japan"*)          region_code="ap-northeast-1"; datacenter="东京数据中心" ;;
+            *"Seoul"*|*"Korea"*)          region_code="ap-northeast-2"; datacenter="首尔数据中心" ;;
+            *"Osaka"*)                    region_code="ap-northeast-3"; datacenter="大阪数据中心" ;;
+            *"Singapore"*)                region_code="ap-southeast-1"; datacenter="新加坡数据中心" ;;
+            *"Sydney"*|*"Australia"*)     region_code="ap-southeast-2"; datacenter="悉尼数据中心" ;;
+            *"Mumbai"*|*"India"*)         region_code="ap-south-1"; datacenter="孟买数据中心" ;;
+            *"Hong Kong"*)                region_code="ap-east-1"; datacenter="香港数据中心" ;;
+            *"Jakarta"*|*"Indonesia"*)    region_code="ap-southeast-3"; datacenter="雅加达数据中心" ;;
             
-        *"Google"*|*"GCP"*|*"GOOGLE"*)
-            cloud_provider="Google Cloud"
-            case "$location" in
-                *"Tokyo"*|*"Japan"*)          region_code="asia-northeast1"; datacenter="东京-大森机房" ;;
-                *"Singapore"*)                 region_code="asia-southeast1"; datacenter="新加坡机房" ;;
-                *"Hong Kong"*)                 region_code="asia-east2"; datacenter="香港机房" ;;
-                *"Seoul"*|*"Korea"*)          region_code="asia-northeast3"; datacenter="首尔机房" ;;
-                *"Sydney"*|*"Australia"*)     region_code="australia-southeast1"; datacenter="悉尼机房" ;;
-                *"Mumbai"*|*"India"*)         region_code="asia-south1"; datacenter="孟买机房" ;;
-                *) datacenter="$location" ;;
-            esac
-            ;;
+            # 美洲地区
+            *"N. Virginia"*|*"Virginia"*) region_code="us-east-1"; datacenter="弗吉尼亚数据中心" ;;
+            *"Ohio"*)                     region_code="us-east-2"; datacenter="俄亥俄数据中心" ;;
+            *"N. California"*)            region_code="us-west-1"; datacenter="加利福尼亚数据中心" ;;
+            *"Oregon"*)                   region_code="us-west-2"; datacenter="俄勒冈数据中心" ;;
+            *"São Paulo"*|*"Brazil"*)     region_code="sa-east-1"; datacenter="圣保罗数据中心" ;;
             
-        *"Alibaba"*|*"Aliyun"*|*"阿里"*)
-            cloud_provider="阿里云"
-            case "$location" in
-                *"Hangzhou"*|*"杭州"*)        region_code="cn-hangzhou"; datacenter="杭州可用区" ;;
-                *"Shanghai"*|*"上海"*)        region_code="cn-shanghai"; datacenter="上海可用区" ;;
-                *"Hong Kong"*|*"香港"*)       region_code="cn-hongkong"; datacenter="香港可用区" ;;
-                *"Singapore"*|*"新加坡"*)     region_code="ap-southeast-1"; datacenter="新加坡可用区" ;;
-                *"Tokyo"*|*"东京"*)           region_code="ap-northeast-1"; datacenter="东京可用区" ;;
-                *) datacenter="$location" ;;
-            esac
-            ;;
+            # 欧洲地区
+            *"Ireland"*)                  region_code="eu-west-1"; datacenter="爱尔兰数据中心" ;;
+            *"London"*|*"England"*)       region_code="eu-west-2"; datacenter="伦敦数据中心" ;;
+            *"Paris"*|*"France"*)         region_code="eu-west-3"; datacenter="巴黎数据中心" ;;
+            *"Frankfurt"*|*"Germany"*)    region_code="eu-central-1"; datacenter="法兰克福数据中心" ;;
+            *"Stockholm"*|*"Sweden"*)     region_code="eu-north-1"; datacenter="斯德哥尔摩数据中心" ;;
+            *"Milan"*|*"Italy"*)          region_code="eu-south-1"; datacenter="米兰数据中心" ;;
             
-        *"Azure"*|*"Microsoft"*)
-            cloud_provider="Azure"
-            case "$location" in
-                *"Hong Kong"*|*"香港"*)       region_code="eastasia"; datacenter="香港数据中心" ;;
-                *"Singapore"*|*"新加坡"*)     region_code="southeastasia"; datacenter="新加坡数据中心" ;;
-                *"Tokyo"*|*"东京"*)           region_code="japaneast"; datacenter="东京数据中心" ;;
-                *"Seoul"*|*"首尔"*)           region_code="koreacentral"; datacenter="首尔数据中心" ;;
-                *) datacenter="$location" ;;
-            esac
-            ;;
+            # 中东和非洲
+            *"Bahrain"*)                  region_code="me-south-1"; datacenter="巴林数据中心" ;;
+            *"Cape Town"*|*"Africa"*)     region_code="af-south-1"; datacenter="开普敦数据中心" ;;
             
-        *"Tencent"*|*"腾讯"*)
-            cloud_provider="腾讯云"
-            case "$location" in
-                *"Hong Kong"*|*"香港"*)       region_code="ap-hongkong"; datacenter="香港数据中心" ;;
-                *"Shanghai"*|*"上海"*)        region_code="ap-shanghai"; datacenter="上海金融云" ;;
-                *"Singapore"*|*"新加坡"*)     region_code="ap-singapore"; datacenter="新加坡数据中心" ;;
-                *"Tokyo"*|*"东京"*)           region_code="ap-tokyo"; datacenter="东京数据中心" ;;
-                *) datacenter="$location" ;;
-            esac
-            ;;
-            
-        # 其他主要供应商
-        *"DigitalOcean"*)
-            cloud_provider="DigitalOcean"
-            case "$location" in
-                *"Singapore"*)     region_code="sgp1"; datacenter="新加坡 SG1" ;;
-                *"Bangalore"*)     region_code="blr1"; datacenter="班加罗尔 BLR1" ;;
-                *) datacenter="$location" ;;
-            esac
-            ;;
-            
-        *"Vultr"*)
-            cloud_provider="Vultr"
-            case "$location" in
-                *"Tokyo"*)         region_code="nrt"; datacenter="东京 NRT" ;;
-                *"Singapore"*)     region_code="sgp"; datacenter="新加坡 SGP" ;;
-                *"Seoul"*)         region_code="icn"; datacenter="首尔 ICN" ;;
-                *) datacenter="$location" ;;
-            esac
-            ;;
-            
-        *"Linode"*|*"Akamai"*)
-            cloud_provider="Linode"
-            case "$location" in
-                *"Tokyo"*)         region_code="ap-northeast"; datacenter="东京数据中心" ;;
-                *"Singapore"*)     region_code="ap-south"; datacenter="新加坡数据中心" ;;
-                *) datacenter="$location" ;;
-            esac
-            ;;
-            
-        # 如果都不匹配，保留原始信息
-        *)
-            cloud_provider="$provider"
-            datacenter="$location"
-            region_code="unknown"
-            ;;
-    esac
+            # 默认情况
+            *) datacenter="$location" ;;
+        esac
     
+    # Google Cloud
+    elif [[ "$provider" =~ Google|GCP|GOOGLE ]]; then
+        cloud_provider="Google Cloud"
+        case "$location" in
+            # 亚太地区
+            *"Tokyo"*|*"Japan"*)          region_code="asia-northeast1"; datacenter="东京-大森机房" ;;
+            *"Osaka"*)                    region_code="asia-northeast2"; datacenter="大阪机房" ;;
+            *"Seoul"*|*"Korea"*)          region_code="asia-northeast3"; datacenter="首尔机房" ;;
+            *"Hong Kong"*)                region_code="asia-east2"; datacenter="香港机房" ;;
+            *"Taiwan"*)                   region_code="asia-east1"; datacenter="台湾机房" ;;
+            *"Singapore"*)                region_code="asia-southeast1"; datacenter="新加坡机房" ;;
+            *"Jakarta"*|*"Indonesia"*)    region_code="asia-southeast2"; datacenter="雅加达机房" ;;
+            *"Sydney"*|*"Australia"*)     region_code="australia-southeast1"; datacenter="悉尼机房" ;;
+            *"Melbourne"*)                region_code="australia-southeast2"; datacenter="墨尔本机房" ;;
+            *"Mumbai"*|*"India"*)         region_code="asia-south1"; datacenter="孟买机房" ;;
+            *"Delhi"*)                    region_code="asia-south2"; datacenter="德里机房" ;;
+            
+            # 美洲地区
+            *"Iowa"*)                     region_code="us-central1"; datacenter="爱荷华机房" ;;
+            *"South Carolina"*)           region_code="us-east1"; datacenter="南卡罗来纳机房" ;;
+            *"N. Virginia"*)              region_code="us-east4"; datacenter="弗吉尼亚机房" ;;
+            *"Oregon"*)                   region_code="us-west1"; datacenter="俄勒冈机房" ;;
+            *"Los Angeles"*)              region_code="us-west2"; datacenter="洛杉矶机房" ;;
+            *"Salt Lake City"*)           region_code="us-west3"; datacenter="盐湖城机房" ;;
+            *"Las Vegas"*)                region_code="us-west4"; datacenter="拉斯维加斯机房" ;;
+            *"São Paulo"*)                region_code="southamerica-east1"; datacenter="圣保罗机房" ;;
+            *"Santiago"*)                 region_code="southamerica-west1"; datacenter="圣地亚哥机房" ;;
+            
+            # 欧洲地区
+            *"Belgium"*)                  region_code="europe-west1"; datacenter="比利时机房" ;;
+            *"London"*)                   region_code="europe-west2"; datacenter="伦敦机房" ;;
+            *"Frankfurt"*)                region_code="europe-west3"; datacenter="法兰克福机房" ;;
+            *"Netherlands"*)              region_code="europe-west4"; datacenter="荷兰机房" ;;
+            *"Zürich"*)                   region_code="europe-west6"; datacenter="苏黎世机房" ;;
+            *"Milan"*)                    region_code="europe-west8"; datacenter="米兰机房" ;;
+            *"Paris"*)                    region_code="europe-west9"; datacenter="巴黎机房" ;;
+            *"Warsaw"*)                   region_code="europe-central2"; datacenter="华沙机房" ;;
+            *"Finland"*)                  region_code="europe-north1"; datacenter="芬兰机房" ;;
+            
+            # 默认情况
+            *) datacenter="$location" ;;
+        esac
+        
+    # 阿里云
+    elif [[ "$provider" =~ Alibaba|Aliyun|阿里|ALIBABA ]]; then
+        cloud_provider="阿里云"
+        case "$location" in
+            # 中国地区
+            *"Hangzhou"*|*"杭州"*)        region_code="cn-hangzhou"; datacenter="杭州可用区" ;;
+            *"Shanghai"*|*"上海"*)        region_code="cn-shanghai"; datacenter="上海可用区" ;;
+            *"Beijing"*|*"北京"*)         region_code="cn-beijing"; datacenter="北京可用区" ;;
+            *"Shenzhen"*|*"深圳"*)        region_code="cn-shenzhen"; datacenter="深圳可用区" ;;
+            *"Heyuan"*|*"河源"*)          region_code="cn-heyuan"; datacenter="河源可用区" ;;
+            *"Guangzhou"*|*"广州"*)       region_code="cn-guangzhou"; datacenter="广州可用区" ;;
+            *"Chengdu"*|*"成都"*)         region_code="cn-chengdu"; datacenter="成都可用区" ;;
+            *"Qingdao"*|*"青岛"*)         region_code="cn-qingdao"; datacenter="青岛可用区" ;;
+            *"Hohhot"*|*"呼和浩特"*)      region_code="cn-huhehaote"; datacenter="呼和浩特可用区" ;;
+            *"Ulanqab"*|*"乌兰察布"*)     region_code="cn-wulanchabu"; datacenter="乌兰察布可用区" ;;
+            *"Zhangjiakou"*|*"张家口"*)   region_code="cn-zhangjiakou"; datacenter="张家口可用区" ;;
+            
+            # 中国香港及国际地区
+            *"Hong Kong"*|*"香港"*)       region_code="cn-hongkong"; datacenter="香港可用区" ;;
+            *"Singapore"*|*"新加坡"*)     region_code="ap-southeast-1"; datacenter="新加坡可用区" ;;
+            *"Sydney"*|*"悉尼"*)          region_code="ap-southeast-2"; datacenter="悉尼可用区" ;;
+            *"Kuala Lumpur"*|*"吉隆坡"*)  region_code="ap-southeast-3"; datacenter="吉隆坡可用区" ;;
+            *"Jakarta"*|*"雅加达"*)       region_code="ap-southeast-5"; datacenter="雅加达可用区" ;;
+            *"Mumbai"*|*"孟买"*)          region_code="ap-south-1"; datacenter="孟买可用区" ;;
+            *"Tokyo"*|*"东京"*)           region_code="ap-northeast-1"; datacenter="东京可用区" ;;
+            *"Seoul"*|*"首尔"*)           region_code="ap-northeast-2"; datacenter="首尔可用区" ;;
+            
+            # 默认情况
+            *) datacenter="$location" ;;
+        esac
+        
+    # 腾讯云
+    elif [[ "$provider" =~ Tencent|TENCENT|腾讯|QCloud ]]; then
+        cloud_provider="腾讯云"
+        case "$location" in
+            # 中国地区
+            *"Beijing"*|*"北京"*)         region_code="ap-beijing"; datacenter="北京数据中心" ;;
+            *"Shanghai"*|*"上海"*)        region_code="ap-shanghai"; datacenter="上海数据中心" ;;
+            *"Guangzhou"*|*"广州"*)       region_code="ap-guangzhou"; datacenter="广州数据中心" ;;
+            *"Chengdu"*|*"成都"*)         region_code="ap-chengdu"; datacenter="成都数据中心" ;;
+            *"Chongqing"*|*"重庆"*)       region_code="ap-chongqing"; datacenter="重庆数据中心" ;;
+            *"Nanjing"*|*"南京"*)         region_code="ap-nanjing"; datacenter="南京数据中心" ;;
+            
+            # 中国香港及国际地区
+            *"Hong Kong"*|*"香港"*)       region_code="ap-hongkong"; datacenter="香港数据中心" ;;
+            *"Singapore"*|*"新加坡"*)     region_code="ap-singapore"; datacenter="新加坡数据中心" ;;
+            *"Bangkok"*|*"曼谷"*)         region_code="ap-bangkok"; datacenter="曼谷数据中心" ;;
+            *"Mumbai"*|*"孟买"*)          region_code="ap-mumbai"; datacenter="孟买数据中心" ;;
+            *"Seoul"*|*"首尔"*)           region_code="ap-seoul"; datacenter="首尔数据中心" ;;
+            *"Tokyo"*|*"东京"*)           region_code="ap-tokyo"; datacenter="东京数据中心" ;;
+            *"Silicon Valley"*)           region_code="na-siliconvalley"; datacenter="硅谷数据中心" ;;
+            *"Virginia"*)                 region_code="na-ashburn"; datacenter="弗吉尼亚数据中心" ;;
+            *"Toronto"*)                  region_code="na-toronto"; datacenter="多伦多数据中心" ;;
+            *"Frankfurt"*|*"法兰克福"*)    region_code="eu-frankfurt"; datacenter="法兰克福数据中心" ;;
+            
+            # 默认情况
+            *) datacenter="$location" ;;
+        esac
+        
+    # Azure
+    elif [[ "$provider" =~ Azure|Microsoft|AZURE|MICROSOFT ]]; then
+        cloud_provider="Azure"
+        case "$location" in
+            # 亚太地区
+            *"Hong Kong"*|*"香港"*)       region_code="eastasia"; datacenter="香港数据中心" ;;
+            *"Singapore"*|*"新加坡"*)     region_code="southeastasia"; datacenter="新加坡数据中心" ;;
+            *"Tokyo"*|*"东京"*)           region_code="japaneast"; datacenter="东京数据中心" ;;
+            *"Osaka"*|*"大阪"*)           region_code="japanwest"; datacenter="大阪数据中心" ;;
+            *"Seoul"*|*"首尔"*)           region_code="koreacentral"; datacenter="首尔数据中心" ;;
+            *"Busan"*|*"釜山"*)           region_code="koreasouth"; datacenter="釜山数据中心" ;;
+            
+            # 默认情况
+            *) datacenter="$location" ;;
+        esac
+        
+    # Digital Ocean
+    elif [[ "$provider" =~ DigitalOcean|DIGITALOCEAN ]]; then
+        cloud_provider="DigitalOcean"
+        case "$location" in
+            *"New York"*)                 region_code="nyc1"; datacenter="纽约 NYC1" ;;
+            *"Amsterdam"*)                region_code="ams1"; datacenter="阿姆斯特丹 AMS1" ;;
+            *"San Francisco"*)            region_code="sfo1"; datacenter="旧金山 SFO1" ;;
+            *"Singapore"*)                region_code="sgp1"; datacenter="新加坡 SGP1" ;;
+            *"London"*)                   region_code="lon1"; datacenter="伦敦 LON1" ;;
+            *"Frankfurt"*)                region_code="fra1"; datacenter="法兰克福 FRA1" ;;
+            *"Toronto"*)                  region_code="tor1"; datacenter="多伦多 TOR1" ;;
+            *"Bangalore"*)                region_code="blr1"; datacenter="班加罗尔 BLR1" ;;
+            
+            # 默认情况
+            *) datacenter="$location" ;;
+        esac
+        
+    # Vultr
+    elif [[ "$provider" =~ Vultr|VULTR ]]; then
+        cloud_provider="Vultr"
+        case "$location" in
+            *"Tokyo"*)                    region_code="nrt"; datacenter="东京 NRT" ;;
+            *"Singapore"*)                region_code="sgp"; datacenter="新加坡 SGP" ;;
+            *"Seoul"*)                    region_code="icn"; datacenter="首尔 ICN" ;;
+            *"Delhi"*)                    region_code="del"; datacenter="德里 DEL" ;;
+            *"Sydney"*)                   region_code="syd"; datacenter="悉尼 SYD" ;;
+            *"Frankfurt"*)                region_code="fra"; datacenter="法兰克福 FRA" ;;
+            *"Paris"*)                    region_code="cdg"; datacenter="巴黎 CDG" ;;
+            *"Amsterdam"*)                region_code="ams"; datacenter="阿姆斯特丹 AMS" ;;
+            *"London"*)                   region_code="lhr"; datacenter="伦敦 LHR" ;;
+            *"New Jersey"*)               region_code="ewr"; datacenter="新泽西 EWR" ;;
+            *"Chicago"*)                  region_code="ord"; datacenter="芝加哥 ORD" ;;
+            *"Atlanta"*)                  region_code="atl"; datacenter="亚特兰大 ATL" ;;
+            *"Miami"*)                    region_code="mia"; datacenter="迈阿密 MIA" ;;
+            *"Dallas"*)                   region_code="dfw"; datacenter="达拉斯 DFW" ;;
+            *"Silicon Valley"*)           region_code="sjo"; datacenter="硅谷 SJO" ;;
+            *"Los Angeles"*)              region_code="lax"; datacenter="洛杉矶 LAX" ;;
+            *"Seattle"*)                  region_code="sea"; datacenter="西雅图 SEA" ;;
+            *"Mexico City"*)              region_code="mex"; datacenter="墨西哥城 MEX" ;;
+            *"São Paulo"*)                region_code="sao"; datacenter="圣保罗 SAO" ;;
+            *"Melbourne"*)                region_code="mel"; datacenter="墨尔本 MEL" ;;
+            *"Warsaw"*)                   region_code="waw"; datacenter="华沙 WAW" ;;
+            *"Stockholm"*)                region_code="sto"; datacenter="斯德哥尔摩 STO" ;;
+            *"Johannesburg"*)             region_code="jnb"; datacenter="约翰内斯堡 JNB" ;;
+            
+            # 默认情况
+            *) datacenter="$location" ;;
+        esac
+        
+    # Linode/Akamai
+    elif [[ "$provider" =~ Linode|LINODE|Akamai|AKAMAI ]]; then
+        cloud_provider="Linode"
+        case "$location" in
+            *"Tokyo"*)                    region_code="ap-northeast"; datacenter="东京数据中心" ;;
+            *"Singapore"*)                region_code="ap-south"; datacenter="新加坡数据中心" ;;
+            *"Sydney"*)                   region_code="ap-southeast"; datacenter="悉尼数据中心" ;;
+            *"Mumbai"*)                   region_code="ap-west"; datacenter="孟买数据中心" ;;
+            *"Toronto"*)                  region_code="ca-central"; datacenter="多伦多数据中心" ;;
+            *"Frankfurt"*)                region_code="eu-central"; datacenter="法兰克福数据中心" ;;
+            *"London"*)                   region_code="eu-west"; datacenter="伦敦数据中心" ;;
+            *"Newark"*)                   region_code="us-east"; datacenter="纽瓦克数据中心" ;;
+            *"Atlanta"*)                  region_code="us-southeast"; datacenter="亚特兰大数据中心" ;;
+            *"Dallas"*)                   region_code="us-central"; datacenter="达拉斯数据中心" ;;
+            *"Los Angeles"*)              region_code="us-west"; datacenter="洛杉矶数据中心" ;;
+            
+            # 默认情况
+            *) datacenter="$location" ;;
+        esac
+        
+    # 如果都不匹配，使用原始信息
+    else
+        cloud_provider="$provider"
+        datacenter="$location"
+        region_code="unknown"
+    fi
+    
+    # 返回结果，用 | 分隔三个值
     echo "$cloud_provider|$region_code|$datacenter"
 }
 
