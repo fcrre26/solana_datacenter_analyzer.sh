@@ -291,12 +291,26 @@ identify_datacenter() {
 }
 
 # 获取验证者信息
+# 修改 get_validators 函数
 get_validators() {
     log "INFO" "正在获取验证者信息..."
     
+    # 添加重试机制
+    local max_retries=3
+    local retry_count=0
     local validators
-    validators=$(solana gossip 2>/dev/null)
-    if [ $? -ne 0 ]; then
+    
+    while ((retry_count < max_retries)); do
+        validators=$(solana gossip 2>/dev/null)
+        if [ $? -eq 0 ] && [ -n "$validators" ]; then
+            break
+        fi
+        ((retry_count++))
+        log "WARN" "获取验证者信息失败，正在重试 ($retry_count/$max_retries)..."
+        sleep 2
+    done
+    
+    if [ -z "$validators" ]; then
         log "ERROR" "无法通过 solana gossip 获取验证者信息"
         return 1
     fi
@@ -552,11 +566,14 @@ generate_report() {
 analyze_validators() {
     log "INFO" "开始分析验证者节点分布"
     
+    # 添加调试信息
+    log "DEBUG" "正在执行 get_validators..."
+    
     local validator_ips
-    validator_ips=$(get_validators)
-    if [ $? -ne 0 ]; then
+    validator_ips=$(get_validators) || {
+        log "ERROR" "获取验证者信息失败"
         return 1
-    fi
+    }
     
     > "${RESULTS_FILE}"
     
@@ -570,45 +587,57 @@ analyze_validators() {
     log "INFO" "找到 ${total} 个唯一的验证者节点"
     echo -e "\n${YELLOW}正在分析节点位置信息...${NC}"
     
+    # 添加错误处理和进度保存
     while read -r ip; do
         ((current++))
         show_progress "$current" "$total"
         
+        # 添加调试信息
+        log "DEBUG" "正在分析 IP: $ip ($current/$total)"
+        
         local dc_info
-        dc_info=$(identify_datacenter "$ip")
-        local provider
-        provider=$(echo "$dc_info" | cut -d'|' -f1)
-        local datacenter
-        datacenter=$(echo "$dc_info" | cut -d'|' -f2)
-        local location
-        location=$(echo "$dc_info" | cut -d'|' -f3)
-        local subnet
-        subnet=$(echo "$dc_info" | cut -d'|' -f4)
-        local asn
-        asn=$(echo "$dc_info" | cut -d'|' -f5)
-        local instance_type
-        instance_type=$(echo "$dc_info" | cut -d'|' -f6)
-        local network_capacity
-        network_capacity=$(echo "$dc_info" | cut -d'|' -f7)
+        dc_info=$(identify_datacenter "$ip") || {
+            log "WARN" "无法识别数据中心信息: $ip"
+            continue
+        }
         
         local network_stats
-        network_stats=$(test_network_quality "$ip")
-        local min_latency
+        network_stats=$(test_network_quality "$ip") || {
+            log "WARN" "无法测试网络质量: $ip"
+            continue
+        }
+        
+        # 解析数据中心信息
+        local provider datacenter location subnet asn instance_type network_capacity
+        provider=$(echo "$dc_info" | cut -d'|' -f1)
+        datacenter=$(echo "$dc_info" | cut -d'|' -f2)
+        location=$(echo "$dc_info" | cut -d'|' -f3)
+        subnet=$(echo "$dc_info" | cut -d'|' -f4)
+        asn=$(echo "$dc_info" | cut -d'|' -f5)
+        instance_type=$(echo "$dc_info" | cut -d'|' -f6)
+        network_capacity=$(echo "$dc_info" | cut -d'|' -f7)
+        
+        # 解析网络测试结果
+        local min_latency avg_latency max_latency loss
         min_latency=$(echo "$network_stats" | cut -d'|' -f1)
-        local avg_latency
         avg_latency=$(echo "$network_stats" | cut -d'|' -f2)
-        local max_latency
         max_latency=$(echo "$network_stats" | cut -d'|' -f3)
-        local loss
         loss=$(echo "$network_stats" | cut -d'|' -f4)
         
+        # 保存结果
         echo "$ip|$provider|$datacenter|$location|$subnet|$asn|$instance_type|$network_capacity|$min_latency|$avg_latency|$max_latency|$loss" >> "${RESULTS_FILE}"
+        
+        # 每100个节点保存一次进度
+        if ((current % 100 == 0)); then
+            log "INFO" "已完成 $current/$total 个节点分析"
+        fi
+        
     done < "$tmp_ips_file"
     
     rm -f "$tmp_ips_file"
     
     echo -e "\n"
-    log "SUCCESS" "分析完成"
+    log "SUCCESS" "分析完成，共处理 $current 个节点"
     generate_report "${LATEST_REPORT}"
 }
 
