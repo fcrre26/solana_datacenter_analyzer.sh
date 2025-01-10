@@ -270,19 +270,20 @@ generate_report() {
         echo
         
         echo -e "${GREEN}## 延迟统计 (Top 20)${NC}"
-        echo "| IP地址 | 位置 | 延迟(ms) | 供应商 |"
-        echo "|---------|------|-----------|---------|"
+        echo "| %-15s | %-25s | %-10s | %-20s |" "IP地址" "位置" "延迟(ms)" "供应商"
+        echo "|-----------------|---------------------------|------------|---------------------|"
         
         sort -t'|' -k4 -n "${RESULTS_FILE}" | head -20 | while IFS='|' read -r ip provider location latency; do
             if [ "$latency" != "999" ]; then
-                printf "| %s | %s | %s | %s |\n" "$ip" "${location:-Unknown}" "$latency" "${provider:-Unknown}"
+                printf "| %-15s | %-25s | %-10s | %-20s |\n" \
+                    "$ip" "${location:-Unknown}" "$latency" "${provider:-Unknown}"
             fi
         done
         
         echo
         echo -e "${GREEN}## 供应商分布${NC}"
-        echo "| 供应商 | 节点数量 | 平均延迟(ms) |"
-        echo "|---------|------------|--------------|"
+        echo "| %-20s | %-10s | %-15s |" "供应商" "节点数量" "平均延迟(ms)"
+        echo "|---------------------|------------|-----------------|"
         
         awk -F'|' '$4!=999 {
             count[$2]++
@@ -290,7 +291,7 @@ generate_report() {
         }
         END {
             for (provider in count) {
-                printf "| %s | %d | %.2f |\n", 
+                printf "| %-20s | %-10d | %-15.2f |\n", 
                     provider, 
                     count[provider], 
                     latency_sum[provider]/count[provider]
@@ -299,8 +300,8 @@ generate_report() {
         
         echo
         echo -e "${GREEN}## 位置分布${NC}"
-        echo "| 位置 | 节点数量 | 平均延迟(ms) |"
-        echo "|------|------------|--------------|"
+        echo "| %-25s | %-10s | %-15s |" "位置" "节点数量" "平均延迟(ms)"
+        echo "|---------------------------|------------|-----------------|"
         
         awk -F'|' '$4!=999 {
             count[$3]++
@@ -308,7 +309,7 @@ generate_report() {
         }
         END {
             for (location in count) {
-                printf "| %s | %d | %.2f |\n", 
+                printf "| %-25s | %-10d | %-15.2f |\n", 
                     location, 
                     count[location], 
                     latency_sum[location]/count[location]
@@ -320,8 +321,9 @@ generate_report() {
         echo "根据延迟测试结果，以下是推荐的部署方案（按优先级排序）："
         echo
         echo "### 最优部署方案"
-        echo "| 供应商 | 数据中心位置 | IP网段 | 平均延迟 | 测试IP | 测试延迟 |"
-        echo "|---------|--------------|--------|-----------|---------|----------|"
+        echo "| %-15s | %-15s | %-15s | %-12s | %-15s | %-10s |" \
+            "供应商" "数据中心位置" "IP网段" "平均延迟" "测试IP" "测试延迟"
+        echo "|-----------------|-----------------|-----------------|--------------|-----------------|------------|"
         
         # 从结果文件中提取最优的部署方案
         awk -F'|' '$4!=999 {
@@ -348,7 +350,7 @@ generate_report() {
             for (key in count) {
                 split(key, parts, "|")
                 avg_latency = latency_sum[key]/count[key]
-                printf "| %s | %s | %s | %.2fms | %s | %dms |\n", 
+                printf "| %-15s | %-15s | %-15s | %-11.2fms | %-15s | %-9dms |\n", 
                     parts[1],    # 供应商
                     parts[2],    # 位置
                     parts[3],    # 网段
@@ -362,47 +364,47 @@ generate_report() {
         echo "### 部署建议详情"
         echo
         echo "1. 优选部署方案"
-        echo "   - 推荐供应商: Tencent Cloud, AWS, Alibaba Cloud"
-        echo "   - 推荐地区: Singapore, Tokyo, Seoul"
-        echo "   - 网络要求: 公网带宽 ≥ 100Mbps"
-        echo "   - 预期延迟: 10-30ms"
+        printf "   %-15s %s\n" "推荐供应商:" "Tencent Cloud, AWS, Alibaba Cloud"
+        printf "   %-15s %s\n" "推荐地区:" "Singapore, Tokyo, Seoul"
+        printf "   %-15s %s\n" "网络要求:" "公网带宽 ≥ 100Mbps"
+        printf "   %-15s %s\n" "预期延迟:" "10-30ms"
         echo
         echo "2. 备选部署方案"
-        echo "   - 备选供应商: DigitalOcean, Google Cloud"
-        echo "   - 备选地区: Hong Kong, Frankfurt"
-        echo "   - 网络要求: 公网带宽 ≥ 100Mbps"
-        echo "   - 预期延迟: 30-50ms"
+        printf "   %-15s %s\n" "备选供应商:" "DigitalOcean, Google Cloud"
+        printf "   %-15s %s\n" "备选地区:" "Hong Kong, Frankfurt"
+        printf "   %-15s %s\n" "网络要求:" "公网带宽 ≥ 100Mbps"
+        printf "   %-15s %s\n" "预期延迟:" "30-50ms"
         echo
         echo "3. 硬件配置建议"
-        echo "   - CPU: 16核心及以上"
-        echo "   - 内存: 32GB及以上"
-        echo "   - 存储: 1TB NVMe SSD"
-        echo "   - 操作系统: Ubuntu 20.04/22.04 LTS"
+        printf "   %-15s %s\n" "CPU:" "16核心及以上"
+        printf "   %-15s %s\n" "内存:" "32GB及以上"
+        printf "   %-15s %s\n" "存储:" "1TB NVMe SSD"
+        printf "   %-15s %s\n" "操作系统:" "Ubuntu 20.04/22.04 LTS"
         echo
         echo "4. 网络优化建议"
-        echo "   - 启用 TCP BBR 拥塞控制"
-        echo "   - 优化系统网络参数"
-        echo "   - 配置合适的防火墙规则"
-        echo "   - 确保 8899-8900 端口可访问"
+        printf "   %-15s %s\n" "系统优化:" "启用 TCP BBR 拥塞控制"
+        printf "   %-15s %s\n" "参数调整:" "优化系统网络参数"
+        printf "   %-15s %s\n" "安全配置:" "配置合适的防火墙规则"
+        printf "   %-15s %s\n" "端口开放:" "确保 8899-8900 端口可访问"
         echo
         echo "5. 注意事项"
-        echo "   - 建议选择延迟低于 50ms 的节点位置"
-        echo "   - 优先考虑网络稳定性好的供应商"
-        echo "   - 建议在多个地区部署备份节点"
-        echo "   - 定期监控网络性能"
+        printf "   %-15s %s\n" "延迟要求:" "建议选择延迟低于 50ms 的节点位置"
+        printf "   %-15s %s\n" "供应商选择:" "优先考虑网络稳定性好的供应商"
+        printf "   %-15s %s\n" "备份策略:" "建议在多个地区部署备份节点"
+        printf "   %-15s %s\n" "监控要求:" "定期监控网络性能"
         echo
         echo "6. 成本估算（月）"
-        echo "   - 主流云服务商: $200-500"
-        echo "   - 带宽费用: $100-300"
-        echo "   - 存储费用: $50-150"
-        echo "   - 总计: $350-950"
+        printf "   %-15s %s\n" "服务器费用:" "\$200-500"
+        printf "   %-15s %s\n" "带宽费用:" "\$100-300"
+        printf "   %-15s %s\n" "存储费用:" "\$50-150"
+        printf "   %-15s %s\n" "总计:" "\$350-950"
 
         echo
         echo "---"
-        echo "* 延迟测试使用 TCP 连接时间"
-        echo "* 测试端口: 8899(RPC), 8900(Gossip)"
-        echo "* 报告版本: ${VERSION}"
-        echo "* 生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        printf "%-20s %s\n" "* 延迟测试:" "使用 TCP 连接时间"
+        printf "%-20s %s\n" "* 测试端口:" "8899(RPC), 8900(Gossip)"
+        printf "%-20s %s\n" "* 报告版本:" "${VERSION}"
+        printf "%-20s %s\n" "* 生成时间:" "$(date '+%Y-%m-%d %H:%M:%S')"
         
     } > "${LATEST_REPORT}"
     
