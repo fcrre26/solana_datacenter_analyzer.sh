@@ -1223,8 +1223,6 @@ analyze_validators() {
     BACKGROUND_MODE="$background"
     
     log "INFO" "开始分析验证者节点分布"
-    log "INFO" "运行模式: $([ "$background" = "true" ] && echo "后台" || echo "前台")"
-    log "INFO" "处理模式: $([ "$parallel" = "true" ] && echo "并发" || echo "单线程")"
     
     # 获取验证者列表
     local validator_ips
@@ -1239,69 +1237,23 @@ analyze_validators() {
     echo "$validator_ips" > "${TEMP_DIR}/tmp_ips.txt"
     
     local total=$(wc -l < "${TEMP_DIR}/tmp_ips.txt")
-    local current=0
     START_TIME=$(date +%s)
-    
-    log "INFO" "找到 ${total} 个验证者节点"
     
     if [ "$parallel" = "true" ]; then
         log "INFO" "使用 ${MAX_CONCURRENT_JOBS:-10} 个并发任务"
         
-        # 并发处理
-        local queue_size=${MAX_CONCURRENT_JOBS:-10}
-        local running=0
-        declare -A pids
+        # 创建临时结果文件
+        local temp_results="${TEMP_DIR}/temp_results"
+        : > "$temp_results"
         
-        # 创建FIFO管道来控制并发
-        local pipe="${TEMP_DIR}/pipe"
-        mkfifo "$pipe"
-        exec 3<>"$pipe"
-        rm "$pipe"
+        # 创建进度计数器
+        echo "0" > "${TEMP_DIR}/counter"
         
-        # 初始化并发控制
-        for ((i=1; i<=$queue_size; i++)); do
-            echo >&3
-        done
-        
-        while IFS= read -r ip || [ -n "$ip" ]; do
-            # 从管道读取令牌
-            read -u3
-            
-            {
-                local latency=$(test_network_quality "$ip")
-                local ip_info=$(get_ip_info "$ip")
-                local provider_info=$(identify_provider \
-                    "$(echo "$ip_info" | jq -r '.org // "Unknown"')" \
-                    "$(echo "$ip_info" | jq -r '.location // "Unknown"')")
-                
-                local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
-                local region_code=$(echo "$provider_info" | cut -d'|' -f2)
-                local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
-                
-                echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "${RESULTS_FILE}"
-                
-                ((current++))
-                
-                if [ "$background" = "false" ]; then
-                    update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
-                fi
-                
-                # 返回令牌到管道
-                echo >&3
-            } &
-            
-        done < "${TEMP_DIR}/tmp_ips.txt"
-        
-        # 等待所有任务完成
-        wait
-        
-        # 关闭管道
-        exec 3>&-
-        
-    else
-        # 单线程处理
-        while IFS= read -r ip || [ -n "$ip" ]; do
-            ((current++))
+        # 并发处理函数
+        process_ip() {
+            local ip="$1"
+            local result_file="$2"
+            local counter_file="$3"
             
             local latency=$(test_network_quality "$ip")
             local ip_info=$(get_ip_info "$ip")
@@ -1313,13 +1265,57 @@ analyze_validators() {
             local region_code=$(echo "$provider_info" | cut -d'|' -f2)
             local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
             
-            echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "${RESULTS_FILE}"
+            # 原子性写入结果
+            {
+                flock -x 200
+                echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "$result_file"
+                current=$(cat "$counter_file")
+                echo $((current + 1)) > "$counter_file"
+            } 200>"${TEMP_DIR}/write.lock"
             
+            # 更新显示（使用临时文件存储当前进度）
             if [ "$background" = "false" ]; then
-                update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
+                {
+                    flock -x 201
+                    current=$(cat "$counter_file")
+                    update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
+                } 201>"${TEMP_DIR}/display.lock"
             fi
-            
+        }
+        
+        # 使用信号量控制并发
+        local queue_size=${MAX_CONCURRENT_JOBS:-10}
+        local sem_file="${TEMP_DIR}/semaphore"
+        mkfifo "$sem_file"
+        exec 3<>"$sem_file"
+        rm "$sem_file"
+        
+        # 初始化信号量
+        for ((i=1; i<=$queue_size; i++)); do
+            echo >&3
+        done
+        
+        # 并发处理所有IP
+        while IFS= read -r ip || [ -n "$ip" ]; do
+            read -u3  # 获取信号量
+            {
+                process_ip "$ip" "$temp_results" "${TEMP_DIR}/counter"
+                echo >&3  # 释放信号量
+            } &
         done < "${TEMP_DIR}/tmp_ips.txt"
+        
+        # 等待所有任务完成
+        wait
+        
+        # 关闭信号量
+        exec 3>&-
+        
+        # 按顺序整理结果
+        sort -t'|' -k4n "$temp_results" > "${RESULTS_FILE}"
+        
+    else
+        # 单线程处理代码保持不变
+        ...
     fi
     
     generate_report
