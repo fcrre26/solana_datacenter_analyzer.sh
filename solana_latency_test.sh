@@ -330,7 +330,7 @@ test_network_quality() {
     if [[ ! "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         echo "999.000"
         return 0
-    }
+    fi
     
     for ((i=1; i<=retries; i++)); do
         for port in "${ports[@]}"; do
