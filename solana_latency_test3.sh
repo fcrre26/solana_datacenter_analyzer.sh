@@ -1514,7 +1514,7 @@ get_validator_stakes() {
     if ! solana validators --output json > "$temp_file"; then
         log "ERROR" "获取验证者信息失败"
         return 1
-    }
+    fi
     
     # 解析并排序质押量
     jq -r '.validators[] | select(.activatedStake != null) | 
@@ -1524,7 +1524,7 @@ get_validator_stakes() {
     if [ ! -s "${TEMP_DIR}/sorted_stakes.txt" ]; then
         log "ERROR" "解析质押信息失败或数据为空"
         return 1
-    }
+    fi
     
     log "SUCCESS" "质押信息获取成功"
     return 0
@@ -1585,7 +1585,6 @@ print_top_validators() {
 }
 
 # 生成分析报告
-# 生成分析报告
 generate_report() {
     local temp_report="${TEMP_DIR}/temp_report.txt"
     local results_file="${RESULTS_FILE}"
@@ -1593,7 +1592,7 @@ generate_report() {
     if [ ! -f "${results_file}" ]; then
         log "ERROR" "结果文件不存在，无法生成报告"
         return 1
-    }
+    fi
     
     log "INFO" "正在生成分析报告..."
     
@@ -1740,7 +1739,6 @@ generate_report() {
     log "SUCCESS" "分析报告已生成并保存至: ${LATEST_REPORT}"
     return 0
 }
-
 # 测试单个IP
 test_single_ip() {
     local ip="$1"
@@ -2040,7 +2038,7 @@ analyze_validators() {
     if ! get_validator_stakes; then
         log "ERROR" "获取质押信息失败"
         return 1
-    }
+    fi
     
     # 确保已安装jq
     if ! command -v jq &>/dev/null; then
@@ -2049,7 +2047,7 @@ analyze_validators() {
             log "ERROR" "jq安装失败"
             return 1
         }
-    }
+    fi
     
     # 获取验证者列表
     local validator_ips
