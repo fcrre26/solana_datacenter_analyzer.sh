@@ -594,6 +594,127 @@ EOF
         update_asn_database
     fi
 }
+get_ip_info() {
+    local ip="$1"
+    local cache_file="${IP_DB_CACHE_DIR}/${ip}"
+    
+    # 1. 检查缓存
+    if [ -f "$cache_file" ] && [ $(($(date +%s) - $(stat -c %Y "$cache_file"))) -lt 86400 ]; then
+        cat "$cache_file"
+        return 0
+    fi
+
+    # 2. 初始化变量
+    local provider="Unknown"
+    local location="Unknown Location"
+    local asn=""
+    local org=""
+    local response=""
+
+    # 3. ASN 数据库查询
+    if [ -f "${ASN_DB_FILE}" ]; then
+        if command -v mmdblookup >/dev/null 2>&1; then
+            asn=$(mmdblookup --file "${ASN_DB_FILE}" --ip "$ip" autonomous_system_number 2>/dev/null | grep -oP '"\K[^"]+' | head -1)
+            org=$(mmdblookup --file "${ASN_DB_FILE}" --ip "$ip" autonomous_system_organization 2>/dev/null | grep -oP '"\K[^"]+' | head -1)
+            if [ -n "$org" ]; then
+                provider="$org"
+            fi
+        fi
+    fi
+
+    # 如果 ASN 查询失败，尝试备用方案：whois ASN 查询
+    if [ "$provider" = "Unknown" ]; then
+        local asn_info
+        asn_info=$(whois -h whois.radb.net -- "-i origin $(whois "$ip" | grep -i "^origin:" | awk '{print $2}')" 2>/dev/null)
+        if [ -n "$asn_info" ]; then
+            local temp_provider=$(echo "$asn_info" | grep -i "^as-name:" | head -1 | awk '{print $2}')
+            [ -n "$temp_provider" ] && provider="$temp_provider"
+        fi
+    fi
+
+    # 4. IPInfo API 查询
+    if [ -n "${IPINFO_API_KEY}" ] && { [ "$provider" = "Unknown" ] || [ "$location" = "Unknown Location" ]; }; then
+        response=$(curl -s -m 5 -H "Authorization: Bearer ${IPINFO_API_KEY}" "https://ipinfo.io/${ip}/json")
+        if [ $? -eq 0 ] && [ -n "$response" ] && echo "$response" | jq -e . >/dev/null 2>&1; then
+            [ "$provider" = "Unknown" ] && provider=$(echo "$response" | jq -r '.org // .asn // "Unknown"')
+            if [ "$location" = "Unknown Location" ]; then
+                local city=$(echo "$response" | jq -r '.city // empty')
+                local region=$(echo "$response" | jq -r '.region // empty')
+                local country=$(echo "$response" | jq -r '.country // empty')
+                if [ -n "$city" ] && [ -n "$country" ]; then
+                    location="${city}${region:+, $region}, ${country}"
+                fi
+            fi
+        fi
+    fi
+
+    # 5. IP-API 查询（如果上面失败）
+    if [ "$provider" = "Unknown" ] || [ "$location" = "Unknown Location" ]; then
+        response=$(curl -s -m 5 "http://ip-api.com/json/${ip}")
+        if [ $? -eq 0 ] && [ -n "$response" ] && echo "$response" | jq -e . >/dev/null 2>&1; then
+            [ "$provider" = "Unknown" ] && provider=$(echo "$response" | jq -r '.isp // .org // "Unknown"')
+            if [ "$location" = "Unknown Location" ]; then
+                local city=$(echo "$response" | jq -r '.city // empty')
+                local region=$(echo "$response" | jq -r '.regionName // empty')
+                local country=$(echo "$response" | jq -r '.country // empty')
+                if [ -n "$city" ] && [ -n "$country" ]; then
+                    location="${city}${region:+, $region}, ${country}"
+                fi
+            fi
+        fi
+    fi
+
+    # 6. whois 查询（如果还是失败）
+    if [ "$provider" = "Unknown" ] || [ "$location" = "Unknown Location" ]; then
+        local whois_info
+        whois_info=$(whois "$ip" 2>/dev/null)
+        if [ $? -eq 0 ] && [ -n "$whois_info" ]; then
+            if [ "$provider" = "Unknown" ]; then
+                local temp_provider=$(echo "$whois_info" | grep -iE "^(Organization|OrgName|netname|descr):" | head -1 | cut -d: -f2- | xargs)
+                [ -n "$temp_provider" ] && provider="$temp_provider"
+            fi
+            if [ "$location" = "Unknown Location" ]; then
+                local country=$(echo "$whois_info" | grep -iE "^(country):" | head -1 | cut -d: -f2- | xargs)
+                local city=$(echo "$whois_info" | grep -iE "^(city):" | head -1 | cut -d: -f2- | xargs)
+                [ -n "$city" ] && [ -n "$country" ] && location="${city}, ${country}"
+            fi
+        fi
+    fi
+
+    # 7. 标准化供应商名称
+    if [ -n "$provider" ] && [ "$provider" != "Unknown" ]; then
+        case "${provider,,}" in
+            *"amazon"*|*"aws"*|*"ec2"*)
+                provider="Amazon AWS" ;;
+            *"alibaba"*|*"aliyun"*|*"alicloud"*)
+                provider="Alibaba Cloud" ;;
+            *"google"*|*"gcp"*)
+                provider="Google Cloud" ;;
+            *"azure"*|*"microsoft"*)
+                provider="Microsoft Azure" ;;
+            *"digitalocean"*|*"digital ocean"*)
+                provider="DigitalOcean" ;;
+            *"ovh"*)
+                provider="OVH" ;;
+            *"hetzner"*)
+                provider="Hetzner" ;;
+            *"vultr"*)
+                provider="Vultr" ;;
+            *"linode"*)
+                provider="Linode" ;;
+            *"tencent"*)
+                provider="Tencent Cloud" ;;
+            *"huawei"*)
+                provider="Huawei Cloud" ;;
+        esac
+    fi
+
+    # 8. 构建并缓存结果
+    local result="{\"provider\":\"${provider}\",\"location\":\"${location}\"}"
+    echo "$result" | tee "$cache_file"
+    
+    return 0
+}
 
 # ASN 数据库更新函数
 update_asn_database() {
@@ -601,41 +722,58 @@ update_asn_database() {
     local temp_dir=$(mktemp -d)
     local success=false
 
+    # 确保目录存在
+    mkdir -p "${ASN_DB_DIR}"
+
+    # 1. 首选: MaxMind GeoLite2 数据库
     if [ -n "${MAXMIND_LICENSE_KEY}" ]; then
-        # 尝试下载 MaxMind 数据库
+        log "INFO" "尝试使用 MaxMind 数据库..."
         local db_url="https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${MAXMIND_LICENSE_KEY}&suffix=tar.gz"
-        if curl -s "$db_url" -o "${temp_dir}/asn.tar.gz"; then
-            tar xzf "${temp_dir}/asn.tar.gz" -C "${temp_dir}"
-            if find "${temp_dir}" -name "*.mmdb" -exec cp {} "${ASN_DB_FILE}" \; ; then
-                success=true
-                log "SUCCESS" "MaxMind ASN 数据库更新成功"
+        if curl -s -f "$db_url" -o "${temp_dir}/asn.tar.gz"; then
+            if tar xzf "${temp_dir}/asn.tar.gz" -C "${temp_dir}"; then
+                if find "${temp_dir}" -name "*.mmdb" -exec cp {} "${ASN_DB_FILE}" \; ; then
+                    success=true
+                    log "SUCCESS" "MaxMind ASN 数据库更新成功"
+                fi
             fi
+        else
+            log "WARN" "MaxMind 数据库下载失败，尝试备用源"
         fi
     fi
 
+    # 2. 备选: IP2Location Lite 数据库
     if [ "$success" = false ]; then
-        # 使用备用数据源
-        log "INFO" "尝试使用备用 ASN 数据源..."
-        if wget -q "https://download.ip2location.com/lite/IP2LOCATION-LITE-ASN.BIN.ZIP" -O "${temp_dir}/asn.zip"; then
+        log "INFO" "尝试使用 IP2Location 数据源..."
+        if wget -q --timeout=30 "https://download.ip2location.com/lite/IP2LOCATION-LITE-ASN.BIN.ZIP" -O "${temp_dir}/asn.zip"; then
             if unzip -q "${temp_dir}/asn.zip" -d "${temp_dir}"; then
                 if mv "${temp_dir}/IP2LOCATION-LITE-ASN.BIN" "${ASN_DB_FILE}"; then
                     success=true
                     log "SUCCESS" "IP2Location ASN 数据库更新成功"
                 fi
             fi
+        else
+            log "WARN" "IP2Location 数据库下载失败"
         fi
+    fi
+
+    # 3. 最后备选: 本地缓存
+    if [ "$success" = false ] && [ -f "${ASN_DB_FILE}" ]; then
+        log "WARN" "使用现有的本地数据库缓存"
+        success=true
     fi
 
     # 清理临时文件
     rm -rf "${temp_dir}"
 
     if [ "$success" = false ]; then
-        log "ERROR" "ASN 数据库更新失败"
+        log "ERROR" "ASN 数据库更新失败，所有数据源均不可用"
         return 1
     fi
 
     # 更新版本信息
     date +%s > "${ASN_DB_VERSION_FILE}"
+    chmod 644 "${ASN_DB_FILE}" "${ASN_DB_VERSION_FILE}"
+    
     return 0
 }
 
