@@ -1837,7 +1837,7 @@ analyze_validators() {
         echo "0" > "${TEMP_DIR}/counter"
         
         # 并发处理函数
-     process_ip() {
+process_ip() {
     local ip="$1"
     local result_file="$2"
     local counter_file="$3"
@@ -1849,10 +1849,10 @@ analyze_validators() {
     local latency=$(test_network_quality "$ip")
     local provider_info=$(get_ip_info "$ip")
     
-    # 解析供应商信息
-    local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
+    # 解析供应商信息，并去除 "provider": 前缀
+    local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1 | sed 's/{"provider":"\(.*\)"}/\1/')
     local region_code=$(echo "$provider_info" | cut -d'|' -f2)
-    local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
+    local datacenter=$(echo "$provider_info" | cut -d'|' -f3 | sed 's/{"provider":"\(.*\)"}/\1/')
     
     # 原子性写入结果
     echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" > "$temp_result"
