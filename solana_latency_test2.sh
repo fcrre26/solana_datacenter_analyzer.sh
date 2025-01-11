@@ -1509,6 +1509,13 @@ get_validators() {
 generate_report() {
     local temp_report="${TEMP_DIR}/temp_report.txt"
     
+    if [ ! -f "${STATS_FILE}" ]; then
+        log "ERROR" "统计文件不存在，无法生成报告"
+        return 1
+    }
+    
+    log "INFO" "正在生成分析报告..."
+    
     {
         echo "===================================================================================="
         echo "                         Solana 验证者节点分布分析报告"
@@ -1516,9 +1523,15 @@ generate_report() {
         echo
         echo "【供应商分布统计】"
         echo "------------------------------------------------------------------------------------"
-        echo "主导供应商: TERASWITCH"
-        echo "节点数量: 1172 (占比: 22.0%)"
+        
+        # 读取主导供应商信息
+        local top_provider=$(head -n 1 "${STATS_FILE}" | cut -d'|' -f1)
+        local top_count=$(head -n 1 "${STATS_FILE}" | cut -d'|' -f2)
+        local top_share=$(head -n 1 "${STATS_FILE}" | cut -d'|' -f3)
+        echo "主导供应商: ${top_provider}"
+        echo "节点数量: ${top_count} (占比: ${top_share}%)"
         echo
+        
         echo "供应商排名 (Top 20):"
         echo "------------------------------------------------------------------------------------"
         printf "%-25s | %-10s | %-15s | %-18s | %-15s\n" \
@@ -1527,17 +1540,14 @@ generate_report() {
         
         # 供应商排名数据
         awk -F'|' '
-        BEGIN {
-            format = "%-25s | %-10d | %-15.1f%% | %-18.2f ms | %-15.1f%%\n"
-        }
         {
-            printf format, 
-                substr($1,1,25), 
-                $2, 
-                $3, 
-                $4, 
+            printf "%-25s | %10d | %15.1f%% | %15.2f ms | %14.1f%%\n",
+                substr($1,1,25),
+                $2,
+                $3,
+                $4,
                 $5
-        }' "${RESULTS_FILE}" | head -20
+        }' "${PROVIDER_STATS_FILE}" | head -20
         
         echo
         echo "【机房分布统计】"
@@ -1550,16 +1560,13 @@ generate_report() {
         
         # 机房分布数据
         awk -F'|' '
-        BEGIN {
-            format = "%-35s | %-20s | %-12d | %-15.1f%%\n"
-        }
         {
-            printf format,
+            printf "%-35s | %-20s | %12d | %14.1f%%\n",
                 substr($1,1,35),
                 substr($2,1,20),
                 $3,
                 $4
-        }' "${RESULTS_FILE}" | head -20
+        }' "${LOCATION_STATS_FILE}" | head -20
         
         echo
         echo "主要地区分布 (Top 20):"
@@ -1567,7 +1574,10 @@ generate_report() {
         printf "%-35s | %-12s | %-15s\n" \
             "地区" "节点数" "占比"
         echo "------------------------------------------------------------------------------------"
-        printf "%-35s | %-12d | %-15.1f%%\n" "全球总计" "5332" "100.0"
+        
+        # 全球总计
+        total_nodes=$(awk -F'|' '{sum+=$2} END {print sum}' "${PROVIDER_STATS_FILE}")
+        printf "%-35s | %12d | %14.1f%%\n" "全球总计" "${total_nodes}" "100.0"
         
         echo
         echo "【最优部署建议】"
@@ -1578,18 +1588,15 @@ generate_report() {
             "机房" "供应商" "节点数" "平均延迟"
         echo "------------------------------------------------------------------------------------"
         
-        # 备选方案数据
+        # 备选方案数据（按延迟排序，选择节点数>=3的机房）
         awk -F'|' '
-        BEGIN {
-            format = "%-35s | %-20s | %-12d | %-15.2f ms\n"
-        }
-        {
-            printf format,
+        $3 >= 3 {
+            printf "%-35s | %-20s | %12d | %14.2f ms\n",
                 substr($1,1,35),
                 substr($2,1,20),
                 $3,
                 $4
-        }' "${RESULTS_FILE}" | head -3
+        }' "${LOCATION_STATS_FILE}" | sort -t'|' -k4,4n | head -3
         
         echo
         echo "部署策略建议："
