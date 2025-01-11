@@ -749,7 +749,6 @@ check_ip_in_range() {
 }
 
 # 初始化数据库和缓存目录
-# 初始化 ASN 数据库
 init_databases() {
     log "INFO" "正在更新 ASN 数据库..."
     
@@ -970,13 +969,6 @@ get_ip_info() {
         cat "$cache_file"
         return 0
     fi
-
-    # 2. 初始化变量
-    local provider="Unknown"
-    local location="Unknown Location"
-    local asn=""
-    local org=""
-    local response=""
 
     # 3. ASN 数据库查询
     if [ -f "${ASN_DB_FILE}" ]; then
