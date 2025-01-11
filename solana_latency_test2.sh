@@ -1506,15 +1506,44 @@ get_validators() {
     } # <-- 添加了这个缺失的闭合大括号
 
 # 生成分析报告
+# 生成分析报告
 generate_report() {
     local temp_report="${TEMP_DIR}/temp_report.txt"
+    local results_file="${RESULTS_FILE}"
     
-    if [ ! -f "${STATS_FILE}" ]; then
-        log "ERROR" "统计文件不存在，无法生成报告"
+    if [ ! -f "${results_file}" ]; then
+        log "ERROR" "结果文件不存在，无法生成报告"
         return 1
     fi
     
     log "INFO" "正在生成分析报告..."
+    
+    # 统计供应商数据
+    local provider_stats=$(awk -F'|' '{
+        provider[$4]++
+        latency[$4]+=$3
+        if($3 <= 300) available[$4]++
+    } END {
+        for(p in provider) {
+            avg_latency = latency[p]/provider[p]
+            avail_rate = available[p]/provider[p]*100
+            printf "%s|%d|%.1f|%.2f|%.1f\n", p, provider[p], provider[p]/NR*100, avg_latency, avail_rate
+        }
+    }' "${results_file}" | sort -t'|' -k2,2nr)
+    
+    # 统计机房数据
+    local location_stats=$(awk -F'|' '{
+        loc_prov[$5"|"$4]++
+        latency[$5"|"$4]+=$3
+    } END {
+        for(lp in loc_prov) {
+            split(lp,arr,"|")
+            location=arr[1]
+            provider=arr[2]
+            avg_latency = latency[lp]/loc_prov[lp]
+            printf "%s|%s|%d|%.2f\n", location, provider, loc_prov[lp], avg_latency
+        }
+    }' "${results_file}" | sort -t'|' -k3,3nr)
     
     {
         echo "===================================================================================="
@@ -1525,9 +1554,11 @@ generate_report() {
         echo "------------------------------------------------------------------------------------"
         
         # 读取主导供应商信息
-        local top_provider=$(head -n 1 "${STATS_FILE}" | cut -d'|' -f1)
-        local top_count=$(head -n 1 "${STATS_FILE}" | cut -d'|' -f2)
-        local top_share=$(head -n 1 "${STATS_FILE}" | cut -d'|' -f3)
+        local top_info=$(echo "$provider_stats" | head -n1)
+        local top_provider=$(echo "$top_info" | cut -d'|' -f1)
+        local top_count=$(echo "$top_info" | cut -d'|' -f2)
+        local top_share=$(echo "$top_info" | cut -d'|' -f3)
+        
         echo "主导供应商: ${top_provider}"
         echo "节点数量: ${top_count} (占比: ${top_share}%)"
         echo
@@ -1539,14 +1570,10 @@ generate_report() {
         echo "------------------------------------------------------------------------------------"
         
         # 供应商排名数据
-        awk -F'|' '{
-            printf "%-25s | %10d | %15.1f%% | %15.2f ms | %14.1f%%\n",
-                substr($1,1,25),
-                $2,
-                $3,
-                $4,
-                $5
-        }' "${PROVIDER_STATS_FILE}" | head -20
+        echo "$provider_stats" | head -20 | while IFS='|' read -r provider count share latency avail; do
+            printf "%-25s | %10d | %15.1f%% | %15.2f ms | %14.1f%%\n" \
+                "${provider:0:25}" "$count" "$share" "$latency" "$avail"
+        done
         
         echo
         echo "【机房分布统计】"
@@ -1554,28 +1581,14 @@ generate_report() {
         echo "主要机房分布 (Top 20):"
         echo
         printf "%-35s | %-20s | %-12s | %-15s\n" \
-            "机房" "供应商" "节点数" "占比"
+            "机房" "供应商" "节点数" "平均延迟"
         echo "------------------------------------------------------------------------------------"
         
         # 机房分布数据
-        awk -F'|' '{
-            printf "%-35s | %-20s | %12d | %14.1f%%\n",
-                substr($1,1,35),
-                substr($2,1,20),
-                $3,
-                $4
-        }' "${LOCATION_STATS_FILE}" | head -20
-        
-        echo
-        echo "主要地区分布 (Top 20):"
-        echo "------------------------------------------------------------------------------------"
-        printf "%-35s | %-12s | %-15s\n" \
-            "地区" "节点数" "占比"
-        echo "------------------------------------------------------------------------------------"
-        
-        # 全球总计
-        total_nodes=$(awk -F'|' '{sum+=$2} END {print sum}' "${PROVIDER_STATS_FILE}")
-        printf "%-35s | %12d | %14.1f%%\n" "全球总计" "${total_nodes}" "100.0"
+        echo "$location_stats" | head -20 | while IFS='|' read -r location provider count latency; do
+            printf "%-35s | %-20s | %12d | %14.2f ms\n" \
+                "${location:0:35}" "${provider:0:20}" "$count" "$latency"
+        done
         
         echo
         echo "【最优部署建议】"
@@ -1587,13 +1600,11 @@ generate_report() {
         echo "------------------------------------------------------------------------------------"
         
         # 备选方案数据（按延迟排序，选择节点数>=3的机房）
-        awk -F'|' '$3 >= 3 {
-            printf "%-35s | %-20s | %12d | %14.2f ms\n",
-                substr($1,1,35),
-                substr($2,1,20),
-                $3,
-                $4
-        }' "${LOCATION_STATS_FILE}" | sort -t'|' -k4,4n | head -3
+        echo "$location_stats" | awk -F'|' '$3 >= 3' | sort -t'|' -k4,4n | head -3 | \
+            while IFS='|' read -r location provider count latency; do
+                printf "%-35s | %-20s | %12d | %14.2f ms\n" \
+                    "${location:0:35}" "${provider:0:20}" "$count" "$latency"
+            done
         
         echo
         echo "部署策略建议："
@@ -1602,7 +1613,7 @@ generate_report() {
         echo "3. 建议选择2-3个不同供应商的机房作为备选，提高可用性"
         echo "4. 定期进行延迟测试和性能监控"
         echo "5. 考虑成本因素，不同地区和供应商的价格差异较大"
-
+        
     } > "$temp_report"
 
     # 保存无颜色版本的报告
@@ -1615,8 +1626,6 @@ generate_report() {
     log "SUCCESS" "分析报告已生成并保存至: ${LATEST_REPORT}"
     return 0
 }
-
-
 
 # 测试单个IP
 test_single_ip() {
