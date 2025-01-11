@@ -1335,13 +1335,13 @@ get_validators() {
     if ! command -v solana &>/dev/null; then
         log "ERROR" "Solana CLI 未安装"
         return 1
-    }
+    fi  # <-- 添加了这个缺失的 fi
 
     # 检查 Solana 网络连接
     if ! solana cluster-version &>/dev/null; then
         log "ERROR" "无法连接到 Solana 网络，请检查网络连接"
         return 1
-    }
+    fi
     
     # 尝试获取验证者列表
     for ((i=1; i<=retry_count; i++)); do
@@ -1413,8 +1413,7 @@ get_validators() {
     
     # 清理临时文件
     rm -f "$temp_file" "${temp_file}.filtered"
-}
-
+} # <-- 添加了这个缺失的闭合大括号
 # 生成报告
 # 在 generate_report 函数中修改统计部分
 generate_report() {
