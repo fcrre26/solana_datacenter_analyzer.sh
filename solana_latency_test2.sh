@@ -1999,10 +1999,11 @@ analyze_validators() {
         # 创建进度计数器
         echo "0" > "${TEMP_DIR}/counter"
         
-        # 并发处理
-        parallel -j "${MAX_CONCURRENT_JOBS:-10}" --bar '
+        # 使用 xargs 进行并发处理
+        cat "${TEMP_DIR}/tmp_ips.txt" | xargs -I {} -P "${MAX_CONCURRENT_JOBS:-10}" bash -c '
             ip="$1"
             counter_file="${TEMP_DIR}/counter"
+            results_file="${RESULTS_FILE}"
             
             # 获取延迟和IP信息
             latency=$(test_network_quality "$ip")
@@ -2012,10 +2013,14 @@ analyze_validators() {
             cloud_provider=$(echo "$provider_info" | cut -d"|" -f1)
             datacenter=$(echo "$provider_info" | cut -d"|" -f2)
             
+            # 使用临时文件避免竞争条件
+            temp_result="${TEMP_DIR}/results/${ip}.tmp"
+            echo "${ip}|${cloud_provider}|${datacenter}|${latency}" > "$temp_result"
+            
             # 原子性写入结果
             {
                 flock -x 200
-                echo "${ip}|${cloud_provider}|${datacenter}|${latency}" >> "${RESULTS_FILE}"
+                cat "$temp_result" >> "$results_file"
                 current=$(($(cat "$counter_file") + 1))
                 echo "$current" > "$counter_file"
                 
@@ -2023,10 +2028,13 @@ analyze_validators() {
                     update_progress "$current" "$total" "$ip" "$latency" "${cloud_provider}-${datacenter}"
                 fi
             } 200>"${TEMP_DIR}/lock"
-        ' ::: $(cat "${TEMP_DIR}/tmp_ips.txt")
+            
+            # 清理临时文件
+            rm -f "$temp_result"
+        ' -- {}
         
     else
-        # 单线程处理
+        # 单线程处理部分保持不变
         local counter=0
         while IFS= read -r ip; do
             ((counter++))
