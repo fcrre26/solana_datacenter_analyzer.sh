@@ -1168,6 +1168,31 @@ test_network_quality() {
     fi
 }
 
+# 验证者节点识别函数
+is_validator_node() {
+    local ip="$1"
+    local result=false
+    
+    # 检查 gossip 端口 (8000)
+    if nc -z -w2 "$ip" 8000 2>/dev/null; then
+        # 获取节点信息
+        local node_info
+        node_info=$(timeout 5s solana gossip --entrypoint "$ip:8000" 2>/dev/null)
+        
+        # 检查是否包含投票账户信息
+        if echo "$node_info" | grep -q "vote pubkey"; then
+            result=true
+        fi
+        
+        # 检查验证者特有端口 8001（TPU）
+        if [ "$result" = "false" ] && nc -z -w2 "$ip" 8001 2>/dev/null; then
+            result=true
+        fi
+    fi
+    
+    echo "$result"
+}
+
 # 供应商识别函数
 identify_provider() {
     local provider="$1"   # 供应商名称
@@ -1960,7 +1985,6 @@ show_config_menu() {
 }
 
 # 分析验证者节点
-# 分析验证者节点
 analyze_validators() {
     local background="${1:-false}"
     local parallel="${2:-false}"
@@ -1977,20 +2001,31 @@ analyze_validators() {
         }
     fi
     
-    # 获取验证者列表
-    local validator_ips
-    validator_ips=$(solana gossip | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u) || {
-        log "ERROR" "获取验证者信息失败"
+    # 获取所有节点列表
+    local all_nodes
+    all_nodes=$(solana gossip | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u) || {
+        log "ERROR" "获取节点信息失败"
         return 1
     }
+    
+    # 过滤验证者节点
+    local validator_ips=""
+    log "INFO" "正在识别验证者节点..."
+    while IFS= read -r ip; do
+        if [ "$(is_validator_node "$ip")" = "true" ]; then
+            validator_ips+="$ip"$'\n'
+            log "INFO" "找到验证者节点: $ip"
+        fi
+    done <<< "$all_nodes"
     
     # 创建临时目录和文件
     mkdir -p "${TEMP_DIR}/results"
     : > "${RESULTS_FILE}"
-    echo "$validator_ips" > "${TEMP_DIR}/tmp_ips.txt"
+    echo -n "$validator_ips" > "${TEMP_DIR}/tmp_ips.txt"
     
     local total=$(wc -l < "${TEMP_DIR}/tmp_ips.txt")
     START_TIME=$(date +%s)
+    log "INFO" "共找到 $total 个验证者节点"
     
     if [ "$parallel" = "true" ]; then
         log "INFO" "使用 ${MAX_CONCURRENT_JOBS:-10} 个并发任务"
