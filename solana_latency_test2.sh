@@ -639,9 +639,6 @@ update_asn_database() {
     return 0
 }
 
-
-# 获取 IP 信息的主函数
-# 获取IP信息的主函数
 get_ip_info() {
     local ip="$1"
     local cache_file="${IP_DB_CACHE_DIR}/${ip}"
@@ -653,27 +650,39 @@ get_ip_info() {
     fi
 
     # 2. 初始化变量
-    local provider=""
-    local location=""
+    local provider="Unknown"
+    local location="Unknown Location"
     local asn=""
     local org=""
+    local response=""
 
     # 3. ASN 数据库查询
     if [ -f "${ASN_DB_FILE}" ]; then
         if command -v mmdblookup >/dev/null 2>&1; then
             asn=$(mmdblookup --file "${ASN_DB_FILE}" --ip "$ip" autonomous_system_number 2>/dev/null | grep -oP '"\K[^"]+' | head -1)
             org=$(mmdblookup --file "${ASN_DB_FILE}" --ip "$ip" autonomous_system_organization 2>/dev/null | grep -oP '"\K[^"]+' | head -1)
-            [ -n "$org" ] && provider="$org"
+            if [ -n "$org" ]; then
+                provider="$org"
+            fi
+        fi
+    fi
+
+    # 如果 ASN 查询失败，尝试备用方案：whois ASN 查询
+    if [ "$provider" = "Unknown" ]; then
+        local asn_info
+        asn_info=$(whois -h whois.radb.net -- "-i origin $(whois "$ip" | grep -i "^origin:" | awk '{print $2}')" 2>/dev/null)
+        if [ -n "$asn_info" ]; then
+            local temp_provider=$(echo "$asn_info" | grep -i "^as-name:" | head -1 | awk '{print $2}')
+            [ -n "$temp_provider" ] && provider="$temp_provider"
         fi
     fi
 
     # 4. IPInfo API 查询
-    if [ -n "${IPINFO_API_KEY}" ] && { [ -z "$provider" ] || [ -z "$location" ]; }; then
-        local response
+    if [ -n "${IPINFO_API_KEY}" ] && { [ "$provider" = "Unknown" ] || [ "$location" = "Unknown Location" ]; }; then
         response=$(curl -s -m 5 -H "Authorization: Bearer ${IPINFO_API_KEY}" "https://ipinfo.io/${ip}/json")
-        if [ $? -eq 0 ] && [ -n "$response" ]; then
-            [ -z "$provider" ] && provider=$(echo "$response" | jq -r '.org // .asn // empty')
-            if [ -z "$location" ]; then
+        if [ $? -eq 0 ] && [ -n "$response" ] && echo "$response" | jq -e . >/dev/null 2>&1; then
+            [ "$provider" = "Unknown" ] && provider=$(echo "$response" | jq -r '.org // .asn // "Unknown"')
+            if [ "$location" = "Unknown Location" ]; then
                 local city=$(echo "$response" | jq -r '.city // empty')
                 local region=$(echo "$response" | jq -r '.region // empty')
                 local country=$(echo "$response" | jq -r '.country // empty')
@@ -684,13 +693,12 @@ get_ip_info() {
         fi
     fi
 
-    # 5. IP-API 查询（免费备用API）
-    if [ -z "$provider" ] || [ -z "$location" ]; then
-        local response
+    # 5. IP-API 查询（如果上面失败）
+    if [ "$provider" = "Unknown" ] || [ "$location" = "Unknown Location" ]; then
         response=$(curl -s -m 5 "http://ip-api.com/json/${ip}")
-        if [ $? -eq 0 ] && [ -n "$response" ]; then
-            [ -z "$provider" ] && provider=$(echo "$response" | jq -r '.isp // .org // empty')
-            if [ -z "$location" ]; then
+        if [ $? -eq 0 ] && [ -n "$response" ] && echo "$response" | jq -e . >/dev/null 2>&1; then
+            [ "$provider" = "Unknown" ] && provider=$(echo "$response" | jq -r '.isp // .org // "Unknown"')
+            if [ "$location" = "Unknown Location" ]; then
                 local city=$(echo "$response" | jq -r '.city // empty')
                 local region=$(echo "$response" | jq -r '.regionName // empty')
                 local country=$(echo "$response" | jq -r '.country // empty')
@@ -701,15 +709,16 @@ get_ip_info() {
         fi
     fi
 
-    # 6. whois 查询作为最后手段
-    if [ -z "$provider" ] || [ -z "$location" ]; then
+    # 6. whois 查询（如果还是失败）
+    if [ "$provider" = "Unknown" ] || [ "$location" = "Unknown Location" ]; then
         local whois_info
         whois_info=$(whois "$ip" 2>/dev/null)
         if [ $? -eq 0 ] && [ -n "$whois_info" ]; then
-            if [ -z "$provider" ]; then
-                provider=$(echo "$whois_info" | grep -iE "^(Organization|OrgName|netname|descr):" | head -1 | cut -d: -f2- | xargs)
+            if [ "$provider" = "Unknown" ]; then
+                local temp_provider=$(echo "$whois_info" | grep -iE "^(Organization|OrgName|netname|descr):" | head -1 | cut -d: -f2- | xargs)
+                [ -n "$temp_provider" ] && provider="$temp_provider"
             fi
-            if [ -z "$location" ]; then
+            if [ "$location" = "Unknown Location" ]; then
                 local country=$(echo "$whois_info" | grep -iE "^(country):" | head -1 | cut -d: -f2- | xargs)
                 local city=$(echo "$whois_info" | grep -iE "^(city):" | head -1 | cut -d: -f2- | xargs)
                 [ -n "$city" ] && [ -n "$country" ] && location="${city}, ${country}"
@@ -718,7 +727,7 @@ get_ip_info() {
     fi
 
     # 7. 标准化供应商名称
-    if [ -n "$provider" ]; then
+    if [ -n "$provider" ] && [ "$provider" != "Unknown" ]; then
         case "${provider,,}" in
             *"amazon"*|*"aws"*|*"ec2"*)
                 provider="Amazon AWS" ;;
@@ -745,16 +754,13 @@ get_ip_info() {
         esac
     fi
 
-    # 8. 设置默认值
-    provider="${provider:-Unknown Provider}"
-    location="${location:-Unknown Location}"
-    
-    # 9. 构建并缓存结果
-    local result="{\"provider\":\"${provider}\",\"location\":\"${location}\",\"asn\":\"${asn}\"}"
+    # 8. 构建并缓存结果
+    local result="{\"provider\":\"${provider}\",\"location\":\"${location}\"}"
     echo "$result" | tee "$cache_file"
     
     return 0
 }
+
 
 # 初始化数据库
 init_ip_db
