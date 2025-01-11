@@ -970,6 +970,13 @@ get_ip_info() {
         return 0
     fi
 
+    # 2. 初始化变量
+    local provider="Unknown"
+    local location="Unknown Location"
+    local asn=""
+    local org=""
+    local response=""
+
     # 3. ASN 数据库查询
     if [ -f "${ASN_DB_FILE}" ]; then
         if command -v mmdblookup >/dev/null 2>&1; then
