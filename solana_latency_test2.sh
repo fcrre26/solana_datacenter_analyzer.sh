@@ -73,6 +73,119 @@ API_CONFIG_FILE="${REPORT_DIR}/api_keys.conf"
 # 创建必要的目录
 mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
 
+
+
+get_provider_from_asn() {
+    local asn="$1"
+    case "$asn" in
+        # AWS - Amazon Web Services
+        "16509"|"14618"|"38895"|"39111"|"7224"|"35994"|"10124"|"16509") echo "AWS" ;;
+
+        # GCP - Google Cloud Platform
+        "15169"|"396982"|"19527"|"43515"|"36040"|"36384"|"36385"|"41264"|"36492") echo "GCP" ;;
+
+        # Azure - Microsoft Cloud
+        "8075"|"8068"|"8069"|"8070"|"8071"|"8072"|"8073"|"8074"|"8075"|"8076"|"8077") echo "Azure" ;;
+
+        # 中国云服务商
+        "45102"|"45103"|"37963"|"45104"|"37963"|"45102"|"45104") echo "阿里云" ;;
+        "45090"|"132203"|"132591"|"132203"|"45090") echo "腾讯云" ;;
+        "55990"|"136907"|"136908"|"136909"|"136238"|"136237"|"136236") echo "华为云" ;;
+        "63835"|"63512") echo "百度云" ;;
+        "37963"|"37965"|"37937"|"37936") echo "阿里巴巴" ;;
+        "7497"|"7586"|"7582"|"7583"|"7584") echo "CSTNET" ;;
+        "4538"|"4537"|"4536"|"4535") echo "中国教育网" ;;
+
+        # Cloudflare
+        "13335"|"209242"|"395747"|"136620"|"394536"|"394556") echo "Cloudflare" ;;
+
+        # DigitalOcean
+        "14061"|"200130"|"202109"|"46652") echo "DigitalOcean" ;;
+
+        # Vultr
+        "20473"|"64515"|"397558"|"401886") echo "Vultr" ;;
+
+        # Linode
+        "63949"|"396998"|"398962"|"396982") echo "Linode" ;;
+
+        # OVH
+        "16276"|"394621"|"394622"|"35540"|"37989") echo "OVH" ;;
+
+        # 中国运营商
+        "4134"|"4809"|"4812"|"4813"|"4816"|"4835"|"17429"|"17430"|"17431") echo "中国电信" ;;
+        "4837"|"9929"|"9808"|"58453"|"17621"|"17622"|"17623"|"17624") echo "中国联通" ;;
+        "9808"|"9929"|"58453"|"56041"|"56042"|"56043"|"56044"|"56046") echo "中国移动" ;;
+        "4847"|"4848"|"4849"|"4850") echo "中国铁通" ;;
+
+        # 韩国运营商
+        "45671"|"45673"|"45674"|"9318"|"9319") echo "韩国KT" ;;
+        "4766"|"4768"|"38120"|"9286"|"9287") echo "韩国SK" ;;
+        "3786"|"9644"|"9645"|"9647") echo "韩国LG" ;;
+
+        # 日本运营商
+        "2914"|"2516"|"2497"|"4713"|"23893") echo "NTT" ;;
+        "17676"|"17677"|"17678"|"17506"|"17534") echo "SoftBank" ;;
+        "4713"|"4725"|"7671"|"7672"|"7673") echo "OCN" ;;
+        "7506"|"7522"|"7516"|"7515"|"7514") echo "GMO" ;;
+        "2527"|"2518"|"2519"|"2520") echo "Sony" ;;
+        "2510"|"2511"|"2512"|"2513") echo "KDDI" ;;
+
+        # 数据中心和托管服务商
+        "396356"|"396377") echo "Latitude.sh" ;;
+        "24940"|"213230"|"213231") echo "Hetzner" ;;
+        "60781"|"201200"|"201201") echo "LeaseWeb" ;;
+        "12876"|"203476"|"209863") echo "Scaleway" ;;
+        "29802"|"29803"|"29804") echo "HVC" ;;
+        "133752"|"133753") echo "DediPath" ;;
+        "63023"|"63024") echo "GTHost" ;;
+        "53667"|"53668") echo "FranTech" ;;
+        "40676"|"40677") echo "Psychz" ;;
+        "25820"|"25821") echo "IT7" ;;
+        "54825"|"54826") echo "Packet Host" ;;
+        "62567"|"62568") echo "HostDare" ;;
+        "46562"|"46563") echo "RackNation" ;;
+        "35916"|"35917") echo "MultaCom" ;;
+        "32097"|"32098") echo "WholeSale" ;;
+        "32244"|"32245") echo "Liquid Web" ;;
+        "32475"|"32476") echo "SingleHop" ;;
+        "33387"|"33388") echo "DataShack" ;;
+        "36352"|"36351") echo "ColoCrossing" ;;
+        "55286"|"55287") echo "Server Room" ;;
+        "40065"|"40066") echo "CNSERVERS" ;;
+
+        # 全球网络服务商
+        "174"|"7018"|"6389"|"5069"|"21928") echo "AT&T" ;;
+        "3356"|"3549"|"3561"|"1785"|"1784") echo "Level3" ;;
+        "6939"|"6940"|"6941"|"6942") echo "HE" ;;
+        "3257"|"3258"|"3259"|"3260"|"3261") echo "GTT" ;;
+        "9002"|"9003"|"9004"|"9005") echo "RETN" ;;
+        "1299"|"1300"|"1301"|"1302") echo "Telia" ;;
+        "6461"|"6462"|"6463"|"6464") echo "Zayo" ;;
+        "6453"|"6454"|"6455"|"6456") echo "TATA" ;;
+        "4826"|"4827"|"4828"|"4829") echo "VOCUS" ;;
+        "4637"|"4638"|"4639"|"4640") echo "Telstra" ;;
+        "7473"|"7474"|"7475"|"7476") echo "Singtel" ;;
+        "2516"|"2517"|"2518"|"2519") echo "KDDI" ;;
+        "4788"|"4789"|"4790"|"4791") echo "TMNet" ;;
+        "4657"|"4658"|"4659"|"4660") echo "StarHub" ;;
+        "9304"|"9305"|"9306"|"9307") echo "HGC" ;;
+        
+        # 新加坡数据中心
+        "138997"|"138998") echo "EDGEUNO" ;;
+        "133929"|"133930") echo "TWOWINPOWER" ;;
+        "135377"|"135378") echo "UCLOUD" ;;
+        "134548"|"134549") echo "NETWIN" ;;
+        
+        # 印度数据中心
+        "45820"|"45821") echo "TTSL" ;;
+        "55410"|"55411") echo "VIL" ;;
+        "45609"|"45610") echo "Bharti" ;;
+        "18101"|"18102") echo "Reliance" ;;
+
+        # 如果没有匹配到，返回原始ASN
+        *) echo "ASN-$asn" ;;
+    esac
+}
 # 错误处理函数
 handle_error() {
     local exit_code=$?
@@ -1849,13 +1962,64 @@ process_ip() {
     local latency=$(test_network_quality "$ip")
     local provider_info=$(get_ip_info "$ip")
     
-    # 解析供应商信息，并去除 "provider": 前缀
-    local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1 | sed 's/{"provider":"\(.*\)"}/\1/')
-    local region_code=$(echo "$provider_info" | cut -d'|' -f2)
-    local datacenter=$(echo "$provider_info" | cut -d'|' -f3 | sed 's/{"provider":"\(.*\)"}/\1/')
+    # 提取 ASN 号码并获取供应商信息
+    local asn=$(echo "$provider_info" | grep -oE '^AS[0-9]+' | grep -oE '[0-9]+')
+    local cloud_provider
+    if [ -n "$asn" ]; then
+        cloud_provider=$(get_provider_from_asn "$asn")
+    else
+        # 如果没有 ASN，使用原始信息进行匹配
+        cloud_provider=$(echo "$provider_info" | cut -d'|' -f1 | 
+            sed -E 's/.*"([^"]+)".*/\1/' |           # 提取引号中的内容
+            sed -E 's/^[0-9]+ //')                   # 删除开头的ASN号
+    fi
+    
+    # 获取数据中心位置
+    local datacenter=$(echo "$provider_info" | cut -d'|' -f3 | 
+        sed -E 's/.*"([^"]+)".*/\1/' |           # 提取引号中的内容
+        case "$datacenter" in
+            *"Tokyo"*|*"Japan"*) echo "东京" ;;
+            *"Singapore"*) echo "新加坡" ;;
+            *"Seoul"*|*"Korea"*) echo "首尔" ;;
+            *"Virginia"*|*"us-east"*) echo "弗吉尼亚" ;;
+            *"Frankfurt"*|*"Germany"*) echo "法兰克福" ;;
+            *"London"*|*"UK"*) echo "伦敦" ;;
+            *"Sydney"*|*"Australia"*) echo "悉尼" ;;
+            *"Mumbai"*|*"India"*) echo "孟买" ;;
+            *"São Paulo"*|*"Brazil"*) echo "圣保罗" ;;
+            *"Ireland"*) echo "爱尔兰" ;;
+            *"Hong Kong"*) echo "香港" ;;
+            *"Shanghai"*) echo "上海" ;;
+            *"Beijing"*) echo "北京" ;;
+            *"Guangzhou"*) echo "广州" ;;
+            *"Shenzhen"*) echo "深圳" ;;
+            *"Hangzhou"*) echo "杭州" ;;
+            *"Osaka"*) echo "大阪" ;;
+            *"Amsterdam"*) echo "阿姆斯特丹" ;;
+            *"Paris"*) echo "巴黎" ;;
+            *"Toronto"*) echo "多伦多" ;;
+            *"Montreal"*) echo "蒙特利尔" ;;
+            *"Dubai"*) echo "迪拜" ;;
+            *"Jakarta"*) echo "雅加达" ;;
+            *"Kuala Lumpur"*) echo "吉隆坡" ;;
+            *"Bangkok"*) echo "曼谷" ;;
+            *"Manila"*) echo "马尼拉" ;;
+            *"Los Angeles"*|*"LA"*) echo "洛杉矶" ;;
+            *"San Jose"*) echo "圣何塞" ;;
+            *"Seattle"*) echo "西雅图" ;;
+            *"Dallas"*) echo "达拉斯" ;;
+            *"Chicago"*) echo "芝加哥" ;;
+            *"New York"*|*"NYC"*) echo "纽约" ;;
+            *"Washington"*|*"DC"*) echo "华盛顿" ;;
+            *"Miami"*) echo "迈阿密" ;;
+            *) echo "$datacenter" ;;
+        esac)
+    
+    # 组合显示格式：供应商-机房
+    local display_location="${cloud_provider}-${datacenter}"
     
     # 原子性写入结果
-    echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" > "$temp_result"
+    echo "$ip|$cloud_provider|$datacenter|$latency" > "$temp_result"
     
     # 使用 flock 确保原子性写入主结果文件
     {
@@ -1868,60 +2032,14 @@ process_ip() {
     # 清理临时文件
     rm -f "$temp_result"
     
-    # 更新显示（使用临时文件存储当前进度）
+    # 更新显示
     if [ "$background" = "false" ]; then
         {
             flock -x 201
             local current=$(cat "$counter_file")
-            update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
+            update_progress "$current" "$total" "$ip" "$latency" "$display_location" "$cloud_provider"
         } 201>"${TEMP_DIR}/display.lock"
     fi
-}
-        
-        # 使用信号量控制并发
-        local queue_size=${MAX_CONCURRENT_JOBS:-10}
-        local sem_file="${TEMP_DIR}/semaphore"
-        mkfifo "$sem_file"
-        exec 3<>"$sem_file"
-        rm "$sem_file"
-        
-        # 初始化信号量
-        for ((i=1; i<=$queue_size; i++)); do
-            echo >&3
-        done
-        
-        # 并发处理所有IP
-        while IFS= read -r ip || [ -n "$ip" ]; do
-            read -u3  # 获取信号量
-            {
-                process_ip "$ip" "$temp_results" "${TEMP_DIR}/counter"
-                echo >&3  # 释放信号量
-            } &
-        done < "${TEMP_DIR}/tmp_ips.txt"
-        
-        # 等待所有任务完成
-        wait
-        
-        # 关闭信号量
-        exec 3>&-
-        
-        # 按顺序整理结果
-        sort -t'|' -k4n "$temp_results" > "${RESULTS_FILE}"
-        
-    else
-        # 单线程处理代码保持不变
-        ...
-    fi
-    
-    generate_report
-    
-    if [ "$background" = "true" ]; then
-        log "SUCCESS" "后台分析完成！报告已生成: ${LATEST_REPORT}"
-    else
-        log "SUCCESS" "分析完成！报告已生成: ${LATEST_REPORT}"
-    fi
-    
-    return 0
 }
 
 # 主函数
