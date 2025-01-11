@@ -158,13 +158,23 @@ manage_api_keys() {
                         "https://ipinfo.io/8.8.8.8/json")
                     
                     if echo "$test_response" | jq -e . >/dev/null 2>&1; then
+                        # 获取配额信息
                         local quota=$(curl -s -m 5 \
                             -H "Authorization: Bearer ${IPINFO_API_KEY}" \
-                            "https://ipinfo.io/api/usage")
+                            "https://ipinfo.io/api/stats")
                         
                         echo -e "\nAPI Key 状态: ${GREEN}有效${NC}"
-                        echo "配额信息："
-                        echo "$quota" | jq -r '.[] | select(.[] != null) | keys[] as $k | "  \($k): \(.[$k])"'
+                        
+                        if [ -n "$quota" ] && echo "$quota" | jq -e . >/dev/null 2>&1; then
+                            echo "配额信息："
+                            echo "$quota" | jq -r '
+                                "  总请求次数: \(.total_requests // "未知")",
+                                "  剩余请求次数: \(.requests_remaining // "未知")",
+                                "  重置时间: \(.reset_date // "未知")"
+                            '
+                        else
+                            echo "无法获取配额信息"
+                        fi
                     else
                         echo -e "\nAPI Key 状态: ${RED}无效${NC}"
                     fi
