@@ -60,6 +60,15 @@ LOCK_FILE="/tmp/solana_dc_finder.lock"
 PROGRESS_FILE="${TEMP_DIR}/progress.txt"
 CONFIG_FILE="${REPORT_DIR}/config.conf"
 VERSION="v1.3.2"
+ASN_DB_DIR="${REPORT_DIR}/asn_db"
+ASN_DB_FILE="${ASN_DB_DIR}/asn.mmdb"
+ASN_DB_VERSION_FILE="${ASN_DB_DIR}/version.txt"
+IP_DB_DIR="${REPORT_DIR}/ip_db"
+IP_DB_CACHE_DIR="${IP_DB_DIR}/cache"
+
+# API 配置文件路径（如果还没有的话）
+API_CONFIG_FILE="${REPORT_DIR}/api_keys.conf"
+
 
 # 创建必要的目录
 mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
@@ -550,214 +559,200 @@ check_ip_in_range() {
     return 1
 }
 
-# 获取 IP 信息的主函数
-# 获取 IP 信息的主函数
-get_ip_info() {
-    local ip="$1"
-    local max_retries=3
-    local retry_count=0
-    local cache_file="${IP_DB_CACHE_DIR}/${ip}"
-    
-    # 检查缓存
-    if [ -f "$cache_file" ]; then
-        local cache_time=$(stat -c %Y "$cache_file")
+# 初始化数据库和缓存目录
+init_databases() {
+    # 创建必要的目录
+    mkdir -p "${ASN_DB_DIR}" "${IP_DB_CACHE_DIR}"
+    chmod 755 "${ASN_DB_DIR}" "${IP_DB_CACHE_DIR}"
+
+    # 如果配置文件不存在，创建默认配置
+    if [ ! -f "${API_CONFIG_FILE}" ]; then
+        cat > "${API_CONFIG_FILE}" <<EOF
+# API Keys Configuration
+MAXMIND_LICENSE_KEY=""
+IPINFO_API_KEY=""
+EOF
+    fi
+
+    # 加载配置
+    source "${API_CONFIG_FILE}"
+
+    # 检查 ASN 数据库
+    local need_update=false
+    if [ ! -f "${ASN_DB_FILE}" ]; then
+        need_update=true
+    else
+        # 检查数据库是否过期（30天更新一次）
+        local last_update=$(stat -c %Y "${ASN_DB_FILE}")
         local current_time=$(date +%s)
-        if [ $((current_time - cache_time)) -lt 86400 ]; then  # 24小时缓存
-            cat "$cache_file"
-            return 0
+        if [ $((current_time - last_update)) -gt 2592000 ]; then
+            need_update=true
         fi
     fi
-    
-    # 清理字符串函数
-    clean_string() {
-        local str="${1:-}"
-        [ -z "$str" ] && return 1
-        echo "$str" | tr -dc '[:print:]' | sed 's/["\]/\\&/g' | sed 's/[^a-zA-Z0-9.,_ -]//g'
-    }
-    
-    # 获取位置信息
-    get_location_info() {
-        local ip="$1"
-        local location=""
-        
-        # 1. 首先尝试从 GeoIP 数据库获取
-        if command -v geoiplookup >/dev/null 2>&1; then
-            local geo_info=$(geoiplookup "$ip" 2>/dev/null)
-            if [ $? -eq 0 ] && [ -n "$geo_info" ]; then
-                local city=$(echo "$geo_info" | grep "GeoIP City" | cut -d: -f2- | sed 's/^[ \t]*//')
-                local country=$(echo "$geo_info" | grep "GeoIP Country" | cut -d: -f2- | sed 's/^[ \t]*//')
-                if [ -n "$city" ] && [ -n "$country" ]; then
-                    location="${city}, ${country}"
+
+    if [ "$need_update" = true ]; then
+        update_asn_database
+    fi
+}
+
+# ASN 数据库更新函数
+update_asn_database() {
+    log "INFO" "正在更新 ASN 数据库..."
+    local temp_dir=$(mktemp -d)
+    local success=false
+
+    if [ -n "${MAXMIND_LICENSE_KEY}" ]; then
+        # 尝试下载 MaxMind 数据库
+        local db_url="https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${MAXMIND_LICENSE_KEY}&suffix=tar.gz"
+        if curl -s "$db_url" -o "${temp_dir}/asn.tar.gz"; then
+            tar xzf "${temp_dir}/asn.tar.gz" -C "${temp_dir}"
+            if find "${temp_dir}" -name "*.mmdb" -exec cp {} "${ASN_DB_FILE}" \; ; then
+                success=true
+                log "SUCCESS" "MaxMind ASN 数据库更新成功"
+            fi
+        fi
+    fi
+
+    if [ "$success" = false ]; then
+        # 使用备用数据源
+        log "INFO" "尝试使用备用 ASN 数据源..."
+        if wget -q "https://download.ip2location.com/lite/IP2LOCATION-LITE-ASN.BIN.ZIP" -O "${temp_dir}/asn.zip"; then
+            if unzip -q "${temp_dir}/asn.zip" -d "${temp_dir}"; then
+                if mv "${temp_dir}/IP2LOCATION-LITE-ASN.BIN" "${ASN_DB_FILE}"; then
+                    success=true
+                    log "SUCCESS" "IP2Location ASN 数据库更新成功"
                 fi
             fi
         fi
-        
-        # 2. 如果 GeoIP 失败，尝试使用 whois 信息
-        if [ -z "$location" ]; then
-            local whois_info=$(whois "$ip" 2>/dev/null)
-            if [ $? -eq 0 ] && [ -n "$whois_info" ]; then
-                local country=$(echo "$whois_info" | grep -iE "^(country):" | head -n1 | cut -d: -f2- | tr -d ' ')
-                local city=$(echo "$whois_info" | grep -iE "^(city):" | head -n1 | cut -d: -f2- | tr -d ' ')
-                if [ -n "$city" ] && [ -n "$country" ]; then
-                    location="${city}, ${country}"
-                elif [ -n "$country" ]; then
-                    location="$country"
-                fi
-            fi
-        fi
-        
-        echo "$location"
-    }
+    fi
+
+    # 清理临时文件
+    rm -rf "${temp_dir}"
+
+    if [ "$success" = false ]; then
+        log "ERROR" "ASN 数据库更新失败"
+        return 1
+    fi
+
+    # 更新版本信息
+    date +%s > "${ASN_DB_VERSION_FILE}"
+    return 0
+}
+
+
+# 获取 IP 信息的主函数
+# 获取IP信息的主函数
+get_ip_info() {
+    local ip="$1"
+    local cache_file="${IP_DB_CACHE_DIR}/${ip}"
     
-    # 验证 JSON 格式
-    validate_json() {
-        local data="$1"
-        if [ -z "$data" ]; then
-            return 1
-        fi
-        if ! echo "$data" | jq . >/dev/null 2>&1; then
-            return 1
-        fi
+    # 1. 检查缓存
+    if [ -f "$cache_file" ] && [ $(($(date +%s) - $(stat -c %Y "$cache_file"))) -lt 86400 ]; then
+        cat "$cache_file"
         return 0
-    }
-    
-    # 尝试从 API 获取信息
-    get_info_from_apis() {
-        local ip="$1"
-        local response=""
-        local json_data=""
-        
-        # 1. 使用 IPInfo API (如果配置了 API key)
-        if [ -n "${IPINFO_API_KEY}" ]; then
-            response=$(curl -s -m 3 \
-                -H "Authorization: Bearer ${IPINFO_API_KEY}" \
-                "https://ipinfo.io/${ip}/json")
-            
-            if [ $? -eq 0 ] && validate_json "$response"; then
-                local org=$(echo "$response" | jq -r '.org // empty')
-                local asn=$(echo "$response" | jq -r '.asn // empty')
-                local hostname=$(echo "$response" | jq -r '.hostname // empty')
+    fi
+
+    # 2. 初始化变量
+    local provider=""
+    local location=""
+    local asn=""
+    local org=""
+
+    # 3. ASN 数据库查询
+    if [ -f "${ASN_DB_FILE}" ]; then
+        if command -v mmdblookup >/dev/null 2>&1; then
+            asn=$(mmdblookup --file "${ASN_DB_FILE}" --ip "$ip" autonomous_system_number 2>/dev/null | grep -oP '"\K[^"]+' | head -1)
+            org=$(mmdblookup --file "${ASN_DB_FILE}" --ip "$ip" autonomous_system_organization 2>/dev/null | grep -oP '"\K[^"]+' | head -1)
+            [ -n "$org" ] && provider="$org"
+        fi
+    fi
+
+    # 4. IPInfo API 查询
+    if [ -n "${IPINFO_API_KEY}" ] && { [ -z "$provider" ] || [ -z "$location" ]; }; then
+        local response
+        response=$(curl -s -m 5 -H "Authorization: Bearer ${IPINFO_API_KEY}" "https://ipinfo.io/${ip}/json")
+        if [ $? -eq 0 ] && [ -n "$response" ]; then
+            [ -z "$provider" ] && provider=$(echo "$response" | jq -r '.org // .asn // empty')
+            if [ -z "$location" ]; then
                 local city=$(echo "$response" | jq -r '.city // empty')
                 local region=$(echo "$response" | jq -r '.region // empty')
                 local country=$(echo "$response" | jq -r '.country // empty')
-                
-                # 增强的位置信息处理
-                local location=""
                 if [ -n "$city" ] && [ -n "$country" ]; then
-                    location="${city}"
-                    [ -n "$region" ] && location+=", ${region}"
-                    location+=", ${country}"
-                else
-                    location=$(get_location_info "$ip")
-                fi
-                
-                # 如果还是没有位置信息，使用备用 API
-                if [ -z "$location" ]; then
-                    local backup_location=$(curl -s -m 3 "https://ipapi.co/${ip}/json/" | jq -r '.city + ", " + .country_name' 2>/dev/null)
-                    if [ "$backup_location" != "null, null" ]; then
-                        location="$backup_location"
-                    fi
-                fi
-                
-                # 供应商识别逻辑
-                local provider=""
-                if [ -n "$org" ]; then
-                    case "$org" in
-                        *"AMAZON"*|*"AWS"*|*"Amazon"*)
-                            provider="Amazon AWS"
-                            ;;
-                        *"ALIBABA"*|*"ALICLOUD"*|*"Alibaba"*)
-                            provider="Alibaba Cloud"
-                            ;;
-                        *"GOOGLE"*|*"GCP"*)
-                            provider="Google Cloud"
-                            ;;
-                        *"AZURE"*|*"MICROSOFT"*)
-                            provider="Microsoft Azure"
-                            ;;
-                        *"DIGITALOCEAN"*)
-                            provider="DigitalOcean"
-                            ;;
-                        *"OVH"*)
-                            provider="OVH"
-                            ;;
-                        *"HETZNER"*)
-                            provider="Hetzner"
-                            ;;
-                        *"VULTR"*)
-                            provider="Vultr"
-                            ;;
-                        *"LINODE"*)
-                            provider="Linode"
-                            ;;
-                        *)
-                            provider="$org"
-                            ;;
-                    esac
-                elif [ -n "$hostname" ]; then
-                    case "$hostname" in
-                        *"amazonaws.com"*)
-                            provider="Amazon AWS"
-                            ;;
-                        *"googleusercontent.com"*)
-                            provider="Google Cloud"
-                            ;;
-                        *"azure"*)
-                            provider="Microsoft Azure"
-                            ;;
-                        *)
-                            provider="$hostname"
-                            ;;
-                    esac
-                elif [ -n "$asn" ]; then
-                    provider="ASN: $asn"
-                fi
-                
-                provider="${provider:-Unknown}"
-                location="${location:-Unknown Location}"
-                
-                if [ -n "$provider" ] && [ -n "$location" ] && [ "$location" != "Unknown Location" ]; then
-                    json_data="{\"provider\":\"$(clean_string "$provider")\",\"location\":\"$(clean_string "$location")\"}"
-                    if validate_json "$json_data"; then
-                        echo "$json_data"
-                        return 0
-                    fi
+                    location="${city}${region:+, $region}, ${country}"
                 fi
             fi
         fi
-        
-        # 如果 IPInfo API 失败，尝试其他方法获取位置信息
-        local location=$(get_location_info "$ip")
-        if [ -n "$location" ]; then
-            local provider=$(whois "$ip" 2>/dev/null | grep -iE "^(Organization|OrgName|netname|descr):" | head -n1 | cut -d: -f2- | tr -d '\t' | xargs)
-            provider="${provider:-Unknown}"
-            json_data="{\"provider\":\"$(clean_string "$provider")\",\"location\":\"$(clean_string "$location")\"}"
-            if validate_json "$json_data"; then
-                echo "$json_data"
-                return 0
+    fi
+
+    # 5. IP-API 查询（免费备用API）
+    if [ -z "$provider" ] || [ -z "$location" ]; then
+        local response
+        response=$(curl -s -m 5 "http://ip-api.com/json/${ip}")
+        if [ $? -eq 0 ] && [ -n "$response" ]; then
+            [ -z "$provider" ] && provider=$(echo "$response" | jq -r '.isp // .org // empty')
+            if [ -z "$location" ]; then
+                local city=$(echo "$response" | jq -r '.city // empty')
+                local region=$(echo "$response" | jq -r '.regionName // empty')
+                local country=$(echo "$response" | jq -r '.country // empty')
+                if [ -n "$city" ] && [ -n "$country" ]; then
+                    location="${city}${region:+, $region}, ${country}"
+                fi
             fi
         fi
-        
-        return 1
-    }
-    
-    # 主逻辑
-    while [ $retry_count -lt $max_retries ]; do
-        local result=$(get_info_from_apis "$ip")
-        if [ $? -eq 0 ] && [ -n "$result" ] && validate_json "$result"; then
-            echo "$result" > "$cache_file"
-            echo "$result"
-            return 0
+    fi
+
+    # 6. whois 查询作为最后手段
+    if [ -z "$provider" ] || [ -z "$location" ]; then
+        local whois_info
+        whois_info=$(whois "$ip" 2>/dev/null)
+        if [ $? -eq 0 ] && [ -n "$whois_info" ]; then
+            if [ -z "$provider" ]; then
+                provider=$(echo "$whois_info" | grep -iE "^(Organization|OrgName|netname|descr):" | head -1 | cut -d: -f2- | xargs)
+            fi
+            if [ -z "$location" ]; then
+                local country=$(echo "$whois_info" | grep -iE "^(country):" | head -1 | cut -d: -f2- | xargs)
+                local city=$(echo "$whois_info" | grep -iE "^(city):" | head -1 | cut -d: -f2- | xargs)
+                [ -n "$city" ] && [ -n "$country" ] && location="${city}, ${country}"
+            fi
         fi
-        
-        ((retry_count++))
-        [ $retry_count -lt $max_retries ] && sleep 1
-    done
+    fi
+
+    # 7. 标准化供应商名称
+    if [ -n "$provider" ]; then
+        case "${provider,,}" in
+            *"amazon"*|*"aws"*|*"ec2"*)
+                provider="Amazon AWS" ;;
+            *"alibaba"*|*"aliyun"*|*"alicloud"*)
+                provider="Alibaba Cloud" ;;
+            *"google"*|*"gcp"*)
+                provider="Google Cloud" ;;
+            *"azure"*|*"microsoft"*)
+                provider="Microsoft Azure" ;;
+            *"digitalocean"*|*"digital ocean"*)
+                provider="DigitalOcean" ;;
+            *"ovh"*)
+                provider="OVH" ;;
+            *"hetzner"*)
+                provider="Hetzner" ;;
+            *"vultr"*)
+                provider="Vultr" ;;
+            *"linode"*)
+                provider="Linode" ;;
+            *"tencent"*)
+                provider="Tencent Cloud" ;;
+            *"huawei"*)
+                provider="Huawei Cloud" ;;
+        esac
+    fi
+
+    # 8. 设置默认值
+    provider="${provider:-Unknown Provider}"
+    location="${location:-Unknown Location}"
     
-    # 如果所有方法都失败，返回默认值
-    local default_result='{"provider":"Unknown Provider","location":"Unknown Location"}'
-    echo "$default_result" > "$cache_file"
-    echo "$default_result"
+    # 9. 构建并缓存结果
+    local result="{\"provider\":\"${provider}\",\"location\":\"${location}\",\"asn\":\"${asn}\"}"
+    echo "$result" | tee "$cache_file"
+    
     return 0
 }
 
@@ -1773,23 +1768,25 @@ main() {
     
     touch "$LOCK_FILE"
     
+    # 初始化所有必要组件
     check_dependencies || exit 1
     install_solana_cli || exit 1
     load_config
-    init_api_config  # 添加 API 配置初始化
+    init_api_config
+    init_databases || log "WARN" "数据库初始化失败，将使用备用方案"
     
     while true; do
         show_menu
         read -r choice
         
         case $choice in
-            1)  check_api_key  # 添加 API key 检查
+            1)  check_api_key
                 analyze_validators false false || {
                     log "ERROR" "分析失败"
                     read -rp "按回车键继续..."
                 }
                 ;;
-            2)  check_api_key  # 添加 API key 检查
+            2)  check_api_key
                 analyze_validators false true || {
                     log "ERROR" "并发分析失败"
                     read -rp "按回车键继续..."
@@ -1816,7 +1813,7 @@ main() {
                 ;;
             6)  show_config_menu
                 ;;
-            7)  manage_api_keys  # 添加 API key 管理选项
+            7)  manage_api_keys
                 ;;
             0)  log "INFO" "感谢使用！"
                 exit 0
@@ -1827,7 +1824,6 @@ main() {
         esac
     done
 }
-
 # 启动程序
 main "$@"
 
