@@ -2004,6 +2004,7 @@ show_config_menu() {
 }
 
 # 分析验证者节点
+# 分析验证者节点
 analyze_validators() {
     local background="${1:-false}"
     local parallel="${2:-false}"
@@ -2052,22 +2053,20 @@ analyze_validators() {
                          grep -oP 'time=\K[0-9.]+' || echo "999")
                 
                 # 获取IP信息
-                provider_info=$(get_ip_info "$ip")
-                cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
-                datacenter=$(echo "$provider_info" | cut -d'|' -f2)
+                local ip_info=$(get_ip_info "$ip")
+                local cloud_provider=$(echo "$ip_info" | cut -d'|' -f1)
+                local datacenter=$(echo "$ip_info" | cut -d'|' -f2)
+                local location=$(echo "$ip_info" | cut -d'|' -f3)
                 
                 # 原子性写入结果
                 {
                     flock -x 200
-                    echo "${ip}|${cloud_provider}|${datacenter}|${latency}" >> "${RESULTS_FILE}"
-                    current=$(($(cat "${TEMP_DIR}/counter") + 1))
+                    echo "${ip}|${cloud_provider}|${datacenter}|${latency}|${location}" >> "${RESULTS_FILE}"
+                    local current=$(($(cat "${TEMP_DIR}/counter") + 1))
                     echo "$current" > "${TEMP_DIR}/counter"
                     
                     if [ "$BACKGROUND_MODE" = "false" ]; then
-                        percent=$((current * 100 / total))
-                        printf "\r进度: [%-50s] %d%% (%d/%d)" \
-                            "$(printf '#%.0s' $(seq 1 $((percent / 2))))" \
-                            "$percent" "$current" "$total"
+                        update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
                     fi
                 } 200>"${TEMP_DIR}/lock"
                 
@@ -2083,8 +2082,29 @@ analyze_validators() {
         exec 3>&-
         
     else
-        # 单线程处理保持不变
-        ...
+        # 单线程处理
+        local current=0
+        while IFS= read -r ip; do
+            ((current++))
+            
+            # 测试IP
+            latency=$(timeout "${TIMEOUT_SECONDS:-2}" ping -c 1 "$ip" 2>/dev/null | \
+                     grep -oP 'time=\K[0-9.]+' || echo "999")
+            
+            # 获取IP信息
+            local ip_info=$(get_ip_info "$ip")
+            local cloud_provider=$(echo "$ip_info" | cut -d'|' -f1)
+            local datacenter=$(echo "$ip_info" | cut -d'|' -f2)
+            local location=$(echo "$ip_info" | cut -d'|' -f3)
+            
+            # 写入结果
+            echo "${ip}|${cloud_provider}|${datacenter}|${latency}|${location}" >> "${RESULTS_FILE}"
+            
+            if [ "$BACKGROUND_MODE" = "false" ]; then
+                update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
+            fi
+            
+        done < "${TEMP_DIR}/tmp_ips.txt"
     fi
     
     # 生成报告
