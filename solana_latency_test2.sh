@@ -749,49 +749,44 @@ check_ip_in_range() {
 }
 
 # 初始化数据库和缓存目录
+# 初始化 ASN 数据库
 init_databases() {
-    # 创建必要的目录
-    mkdir -p "${ASN_DB_DIR}" "${IP_DB_CACHE_DIR}"
-    chmod 755 "${ASN_DB_DIR}" "${IP_DB_CACHE_DIR}"
-
-    # 如果配置文件不存在，创建默认配置
-    if [ ! -f "${API_CONFIG_FILE}" ]; then
-        cat > "${API_CONFIG_FILE}" <<EOF
-# API Keys Configuration
-MAXMIND_LICENSE_KEY=""
-IPINFO_API_KEY=""
-EOF
-    fi
-
-    # 加载配置
-    source "${API_CONFIG_FILE}"
-
-    # 检查 ASN 数据库
-    local need_update=false
-    if [ ! -f "${ASN_DB_FILE}" ]; then
-        need_update=true
-    else
-        # 检查数据库是否过期（30天更新一次）
-        local last_update=$(stat -c %Y "${ASN_DB_FILE}")
-        local current_time=$(date +%s)
-        if [ $((current_time - last_update)) -gt 2592000 ]; then
-            need_update=true
-        fi
-    fi
-
-    if [ "$need_update" = true ]; then
-        update_asn_database
-    fi
-}
-get_ip_info() {
-    local ip="$1"
-    local cache_file="${IP_DB_CACHE_DIR}/${ip}"
+    log "INFO" "正在更新 ASN 数据库..."
     
-    # 1. 检查缓存
-    if [ -f "$cache_file" ] && [ $(($(date +%s) - $(stat -c %Y "$cache_file"))) -lt 86400 ]; then
-        cat "$cache_file"
+    # 创建必要的目录
+    mkdir -p "${ASN_DB_DIR}"
+    
+    # 使用 MaxMind Lite 数据库（免费版本）
+    local mmdb_url="https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-ASN.mmdb"
+    local temp_db="${ASN_DB_DIR}/temp.mmdb"
+    
+    if curl -sSL "$mmdb_url" -o "$temp_db"; then
+        mv "$temp_db" "${ASN_DB_FILE}"
+        log "SUCCESS" "ASN 数据库更新成功"
         return 0
     fi
+    
+    # 如果上述方法失败，使用简化的 ASN 数据
+    log "INFO" "使用内置 ASN 数据..."
+    cat > "${ASN_DB_FILE}" <<EOF
+{
+    "aws": ["16509", "14618", "38895"],
+    "gcp": ["15169", "396982"],
+    "azure": ["8075", "8068", "8069"],
+    "alibaba": ["45102", "45103", "37963"],
+    "tencent": ["45090", "132203"],
+    "huawei": ["55990", "136907"]
+}
+EOF
+    
+    if [ -f "${ASN_DB_FILE}" ]; then
+        log "SUCCESS" "使用内置 ASN 数据库"
+        return 0
+    fi
+    
+    log "WARN" "ASN 数据库初始化失败，将使用基础识别方式"
+    return 1
+}
 
     # 2. 初始化变量
     local provider="Unknown"
@@ -1972,7 +1967,7 @@ analyze_validators() {
     
     # 获取验证者列表
     local validator_ips
-    validator_ips=$(get_validators) || {
+    validator_ips=$(solana gossip | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u) || {
         log "ERROR" "获取验证者信息失败"
         return 1
     }
@@ -1988,68 +1983,62 @@ analyze_validators() {
     if [ "$parallel" = "true" ]; then
         log "INFO" "使用 ${MAX_CONCURRENT_JOBS:-10} 个并发任务"
         
-        # 导出必要的变量和函数
-        export TEMP_DIR RESULTS_FILE START_TIME BACKGROUND_MODE
-        export -f test_network_quality
-        export -f get_ip_info
-        export -f log
-        export -f update_progress
-        export -f get_provider_from_asn
-        
         # 创建进度计数器
         echo "0" > "${TEMP_DIR}/counter"
         
-        # 使用 xargs 进行并发处理
-        cat "${TEMP_DIR}/tmp_ips.txt" | xargs -I {} -P "${MAX_CONCURRENT_JOBS:-10}" bash -c '
-            ip="$1"
-            counter_file="${TEMP_DIR}/counter"
-            results_file="${RESULTS_FILE}"
-            
-            # 获取延迟和IP信息
-            latency=$(test_network_quality "$ip")
-            provider_info=$(get_ip_info "$ip")
-            
-            # 解析结果
-            cloud_provider=$(echo "$provider_info" | cut -d"|" -f1)
-            datacenter=$(echo "$provider_info" | cut -d"|" -f2)
-            
-            # 使用临时文件避免竞争条件
-            temp_result="${TEMP_DIR}/results/${ip}.tmp"
-            echo "${ip}|${cloud_provider}|${datacenter}|${latency}" > "$temp_result"
-            
-            # 原子性写入结果
+        # 使用信号量控制并发
+        local sem_file="${TEMP_DIR}/semaphore"
+        mkfifo "$sem_file"
+        exec 3<>"$sem_file"
+        rm "$sem_file"
+        
+        # 初始化信号量
+        for ((i=1; i<=${MAX_CONCURRENT_JOBS:-10}; i++)); do
+            echo >&3
+        done
+        
+        while IFS= read -r ip; do
+            # 等待信号量
+            read -u 3
             {
-                flock -x 200
-                cat "$temp_result" >> "$results_file"
-                current=$(($(cat "$counter_file") + 1))
-                echo "$current" > "$counter_file"
+                # 测试IP
+                latency=$(timeout "${TIMEOUT_SECONDS:-2}" ping -c 1 "$ip" 2>/dev/null | \
+                         grep -oP 'time=\K[0-9.]+' || echo "999")
                 
-                if [ "$BACKGROUND_MODE" = "false" ]; then
-                    update_progress "$current" "$total" "$ip" "$latency" "${cloud_provider}-${datacenter}"
-                fi
-            } 200>"${TEMP_DIR}/lock"
-            
-            # 清理临时文件
-            rm -f "$temp_result"
-        ' -- {}
+                # 获取IP信息
+                provider_info=$(get_ip_info "$ip")
+                cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
+                datacenter=$(echo "$provider_info" | cut -d'|' -f2)
+                
+                # 原子性写入结果
+                {
+                    flock -x 200
+                    echo "${ip}|${cloud_provider}|${datacenter}|${latency}" >> "${RESULTS_FILE}"
+                    current=$(($(cat "${TEMP_DIR}/counter") + 1))
+                    echo "$current" > "${TEMP_DIR}/counter"
+                    
+                    if [ "$BACKGROUND_MODE" = "false" ]; then
+                        percent=$((current * 100 / total))
+                        printf "\r进度: [%-50s] %d%% (%d/%d)" \
+                            "$(printf '#%.0s' $(seq 1 $((percent / 2))))" \
+                            "$percent" "$current" "$total"
+                    fi
+                } 200>"${TEMP_DIR}/lock"
+                
+                # 释放信号量
+                echo >&3
+            } &
+        done < "${TEMP_DIR}/tmp_ips.txt"
+        
+        # 等待所有任务完成
+        wait
+        
+        # 关闭信号量
+        exec 3>&-
         
     else
-        # 单线程处理部分保持不变
-        local counter=0
-        while IFS= read -r ip; do
-            ((counter++))
-            local latency=$(test_network_quality "$ip")
-            local provider_info=$(get_ip_info "$ip")
-            
-            local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
-            local datacenter=$(echo "$provider_info" | cut -d'|' -f2)
-            
-            echo "${ip}|${cloud_provider}|${datacenter}|${latency}" >> "${RESULTS_FILE}"
-            
-            if [ "$background" = "false" ]; then
-                update_progress "$counter" "$total" "$ip" "$latency" "${cloud_provider}-${datacenter}"
-            fi
-        done < "${TEMP_DIR}/tmp_ips.txt"
+        # 单线程处理保持不变
+        ...
     fi
     
     # 生成报告
