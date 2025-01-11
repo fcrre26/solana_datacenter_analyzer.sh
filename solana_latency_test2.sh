@@ -258,17 +258,27 @@ log() {
 
 # 检查依赖
 check_dependencies() {
-    local deps=("curl" "nc" "whois" "awk" "sort" "jq" "bc")
+    local deps=("curl" "nc" "whois" "awk" "sort" "jq" "bc" "geoiplookup")
     local missing=()
+    local geoip_needed=false
 
+    # 检查所有依赖
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &>/dev/null; then
-            missing+=("$dep")
+            if [ "$dep" = "geoiplookup" ]; then
+                geoip_needed=true
+            else
+                missing+=("$dep")
+            fi
         fi
     done
 
-    if [ ${#missing[@]} -ne 0 ]; then
-        log "INFO" "正在安装必要工具: ${missing[*]}"
+    # 如果有缺失的依赖或需要安装 geoip
+    if [ ${#missing[@]} -ne 0 ] || [ "$geoip_needed" = true ]; then
+        local install_list=("${missing[@]}")
+        [ "$geoip_needed" = true ] && install_list+=("geoip-bin" "geoip-database")
+        
+        log "INFO" "正在安装必要工具: ${install_list[*]}"
         
         # 等待 apt 锁释放
         local max_attempts=30
@@ -293,8 +303,14 @@ check_dependencies() {
             return 1
         fi
         
-        if ! apt-get install -y -qq "${missing[@]}"; then
+        if ! apt-get install -y -qq "${install_list[@]}"; then
             log "ERROR" "工具安装失败"
+            return 1
+        fi
+        
+        # 验证 geoip 安装
+        if [ "$geoip_needed" = true ] && ! command -v geoiplookup &>/dev/null; then
+            log "ERROR" "GeoIP 工具安装失败"
             return 1
         fi
         
@@ -302,6 +318,8 @@ check_dependencies() {
     fi
     return 0
 }
+
+
 
 # 安装 Solana CLI
 install_solana_cli() {
@@ -533,6 +551,7 @@ check_ip_in_range() {
 }
 
 # 获取 IP 信息的主函数
+# 获取 IP 信息的主函数
 get_ip_info() {
     local ip="$1"
     local max_retries=3
@@ -554,6 +573,40 @@ get_ip_info() {
         local str="${1:-}"
         [ -z "$str" ] && return 1
         echo "$str" | tr -dc '[:print:]' | sed 's/["\]/\\&/g' | sed 's/[^a-zA-Z0-9.,_ -]//g'
+    }
+    
+    # 获取位置信息
+    get_location_info() {
+        local ip="$1"
+        local location=""
+        
+        # 1. 首先尝试从 GeoIP 数据库获取
+        if command -v geoiplookup >/dev/null 2>&1; then
+            local geo_info=$(geoiplookup "$ip" 2>/dev/null)
+            if [ $? -eq 0 ] && [ -n "$geo_info" ]; then
+                local city=$(echo "$geo_info" | grep "GeoIP City" | cut -d: -f2- | sed 's/^[ \t]*//')
+                local country=$(echo "$geo_info" | grep "GeoIP Country" | cut -d: -f2- | sed 's/^[ \t]*//')
+                if [ -n "$city" ] && [ -n "$country" ]; then
+                    location="${city}, ${country}"
+                fi
+            fi
+        fi
+        
+        # 2. 如果 GeoIP 失败，尝试使用 whois 信息
+        if [ -z "$location" ]; then
+            local whois_info=$(whois "$ip" 2>/dev/null)
+            if [ $? -eq 0 ] && [ -n "$whois_info" ]; then
+                local country=$(echo "$whois_info" | grep -iE "^(country):" | head -n1 | cut -d: -f2- | tr -d ' ')
+                local city=$(echo "$whois_info" | grep -iE "^(city):" | head -n1 | cut -d: -f2- | tr -d ' ')
+                if [ -n "$city" ] && [ -n "$country" ]; then
+                    location="${city}, ${country}"
+                elif [ -n "$country" ]; then
+                    location="$country"
+                fi
+            fi
+        fi
+        
+        echo "$location"
     }
     
     # 验证 JSON 格式
@@ -582,62 +635,88 @@ get_ip_info() {
             
             if [ $? -eq 0 ] && validate_json "$response"; then
                 local org=$(echo "$response" | jq -r '.org // empty')
-                local city=$(echo "$response" | jq -r '.city // empty')
-                local country=$(echo "$response" | jq -r '.country // empty')
-                
-                if [ -n "$org" ]; then
-                    local location="${city:+$city, }${country}"
-                    if [ -n "$location" ]; then
-                        json_data="{\"provider\":\"$(clean_string "$org")\",\"location\":\"$(clean_string "$location")\"}"
-                        if validate_json "$json_data"; then
-                            echo "$json_data"
-                            return 0
-                        fi
-                    fi
-                fi
-            fi
-        fi
-        
-        # 2. ipapi.co (备用 API)
-        response=$(curl -s -m 3 "https://ipapi.co/${ip}/json/")
-        if [ $? -eq 0 ] && validate_json "$response"; then
-            if [ "$(echo "$response" | jq -r '.error // empty')" != "true" ]; then
-                local org=$(echo "$response" | jq -r '.org // empty')
                 local asn=$(echo "$response" | jq -r '.asn // empty')
+                local hostname=$(echo "$response" | jq -r '.hostname // empty')
                 local city=$(echo "$response" | jq -r '.city // empty')
-                local country=$(echo "$response" | jq -r '.country_name // empty')
-                
-                if [ -n "$org" ] || [ -n "$asn" ]; then
-                    local provider="${org:-$asn}"
-                    local location="${city:+$city, }${country}"
-                    if [ -n "$provider" ] && [ -n "$location" ]; then
-                        json_data="{\"provider\":\"$(clean_string "$provider")\",\"location\":\"$(clean_string "$location")\"}"
-                        if validate_json "$json_data"; then
-                            echo "$json_data"
-                            return 0
-                        fi
-                    fi
-                fi
-            fi
-        fi
-        
-        # 3. ip-api.com (备用 API)
-        response=$(curl -s -m 3 "http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as")
-        if [ $? -eq 0 ] && validate_json "$response"; then
-            if [ "$(echo "$response" | jq -r '.status // empty')" = "success" ]; then
-                local org=$(echo "$response" | jq -r '.org // empty')
-                local isp=$(echo "$response" | jq -r '.isp // empty')
-                local as=$(echo "$response" | jq -r '.as // empty')
-                local city=$(echo "$response" | jq -r '.city // empty')
+                local region=$(echo "$response" | jq -r '.region // empty')
                 local country=$(echo "$response" | jq -r '.country // empty')
                 
-                local provider=""
-                [ -n "$as" ] && provider="${as#AS*} "
-                [ -n "$org" ] && provider+="$org"
-                [ -z "$provider" ] && [ -n "$isp" ] && provider="$isp"
+                # 增强的位置信息处理
+                local location=""
+                if [ -n "$city" ] && [ -n "$country" ]; then
+                    location="${city}"
+                    [ -n "$region" ] && location+=", ${region}"
+                    location+=", ${country}"
+                else
+                    location=$(get_location_info "$ip")
+                fi
                 
-                local location="${city:+$city, }${country}"
-                if [ -n "$provider" ] && [ -n "$location" ]; then
+                # 如果还是没有位置信息，使用备用 API
+                if [ -z "$location" ]; then
+                    local backup_location=$(curl -s -m 3 "https://ipapi.co/${ip}/json/" | jq -r '.city + ", " + .country_name' 2>/dev/null)
+                    if [ "$backup_location" != "null, null" ]; then
+                        location="$backup_location"
+                    fi
+                fi
+                
+                # 供应商识别逻辑
+                local provider=""
+                if [ -n "$org" ]; then
+                    case "$org" in
+                        *"AMAZON"*|*"AWS"*|*"Amazon"*)
+                            provider="Amazon AWS"
+                            ;;
+                        *"ALIBABA"*|*"ALICLOUD"*|*"Alibaba"*)
+                            provider="Alibaba Cloud"
+                            ;;
+                        *"GOOGLE"*|*"GCP"*)
+                            provider="Google Cloud"
+                            ;;
+                        *"AZURE"*|*"MICROSOFT"*)
+                            provider="Microsoft Azure"
+                            ;;
+                        *"DIGITALOCEAN"*)
+                            provider="DigitalOcean"
+                            ;;
+                        *"OVH"*)
+                            provider="OVH"
+                            ;;
+                        *"HETZNER"*)
+                            provider="Hetzner"
+                            ;;
+                        *"VULTR"*)
+                            provider="Vultr"
+                            ;;
+                        *"LINODE"*)
+                            provider="Linode"
+                            ;;
+                        *)
+                            provider="$org"
+                            ;;
+                    esac
+                elif [ -n "$hostname" ]; then
+                    case "$hostname" in
+                        *"amazonaws.com"*)
+                            provider="Amazon AWS"
+                            ;;
+                        *"googleusercontent.com"*)
+                            provider="Google Cloud"
+                            ;;
+                        *"azure"*)
+                            provider="Microsoft Azure"
+                            ;;
+                        *)
+                            provider="$hostname"
+                            ;;
+                    esac
+                elif [ -n "$asn" ]; then
+                    provider="ASN: $asn"
+                fi
+                
+                provider="${provider:-Unknown}"
+                location="${location:-Unknown Location}"
+                
+                if [ -n "$provider" ] && [ -n "$location" ] && [ "$location" != "Unknown Location" ]; then
                     json_data="{\"provider\":\"$(clean_string "$provider")\",\"location\":\"$(clean_string "$location")\"}"
                     if validate_json "$json_data"; then
                         echo "$json_data"
@@ -647,21 +726,24 @@ get_ip_info() {
             fi
         fi
         
+        # 如果 IPInfo API 失败，尝试其他方法获取位置信息
+        local location=$(get_location_info "$ip")
+        if [ -n "$location" ]; then
+            local provider=$(whois "$ip" 2>/dev/null | grep -iE "^(Organization|OrgName|netname|descr):" | head -n1 | cut -d: -f2- | tr -d '\t' | xargs)
+            provider="${provider:-Unknown}"
+            json_data="{\"provider\":\"$(clean_string "$provider")\",\"location\":\"$(clean_string "$location")\"}"
+            if validate_json "$json_data"; then
+                echo "$json_data"
+                return 0
+            fi
+        fi
+        
         return 1
     }
     
     # 主逻辑
     while [ $retry_count -lt $max_retries ]; do
-        # 首先尝试 API
         local result=$(get_info_from_apis "$ip")
-        if [ $? -eq 0 ] && [ -n "$result" ] && validate_json "$result"; then
-            echo "$result" > "$cache_file"
-            echo "$result"
-            return 0
-        fi
-        
-        # 如果 API 失败，尝试数据库查询
-        result=$(query_ip_provider "$ip")
         if [ $? -eq 0 ] && [ -n "$result" ] && validate_json "$result"; then
             echo "$result" > "$cache_file"
             echo "$result"
@@ -678,6 +760,7 @@ get_ip_info() {
     echo "$default_result"
     return 0
 }
+
 # 初始化数据库
 init_ip_db
 
