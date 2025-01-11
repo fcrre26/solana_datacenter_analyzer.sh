@@ -267,25 +267,33 @@ log() {
 
 # 检查依赖
 check_dependencies() {
-    local deps=("curl" "nc" "whois" "awk" "sort" "jq" "bc" "geoiplookup")
+    local deps=("curl" "nc" "whois" "awk" "sort" "jq" "bc" "geoiplookup" "wget" "unzip" "mmdblookup")
     local missing=()
     local geoip_needed=false
+    local mmdb_needed=false
 
     # 检查所有依赖
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &>/dev/null; then
-            if [ "$dep" = "geoiplookup" ]; then
-                geoip_needed=true
-            else
-                missing+=("$dep")
-            fi
+            case "$dep" in
+                "geoiplookup")
+                    geoip_needed=true
+                    ;;
+                "mmdblookup")
+                    mmdb_needed=true
+                    ;;
+                *)
+                    missing+=("$dep")
+                    ;;
+            esac
         fi
     done
 
-    # 如果有缺失的依赖或需要安装 geoip
-    if [ ${#missing[@]} -ne 0 ] || [ "$geoip_needed" = true ]; then
+    # 如果有缺失的依赖
+    if [ ${#missing[@]} -ne 0 ] || [ "$geoip_needed" = true ] || [ "$mmdb_needed" = true ]; then
         local install_list=("${missing[@]}")
         [ "$geoip_needed" = true ] && install_list+=("geoip-bin" "geoip-database")
+        [ "$mmdb_needed" = true ] && install_list+=("libmaxminddb0" "libmaxminddb-dev" "mmdb-bin")
         
         log "INFO" "正在安装必要工具: ${install_list[*]}"
         
@@ -306,6 +314,15 @@ check_dependencies() {
             sleep 10
             ((attempt++))
         done
+
+        # 添加 MaxMind PPA 以获取最新版本
+        if [ "$mmdb_needed" = true ]; then
+            if ! grep -q "ppa:maxmind/ppa" /etc/apt/sources.list.d/*; then
+                if ! add-apt-repository -y ppa:maxmind/ppa; then
+                    log "WARN" "添加 MaxMind PPA 失败，使用默认源"
+                fi
+            fi
+        fi
         
         if ! apt-get update -qq; then
             log "ERROR" "更新软件源失败"
@@ -317,9 +334,19 @@ check_dependencies() {
             return 1
         fi
         
-        # 验证 geoip 安装
+        # 验证安装
+        local verify_failed=false
         if [ "$geoip_needed" = true ] && ! command -v geoiplookup &>/dev/null; then
             log "ERROR" "GeoIP 工具安装失败"
+            verify_failed=true
+        fi
+        
+        if [ "$mmdb_needed" = true ] && ! command -v mmdblookup &>/dev/null; then
+            log "ERROR" "MaxMind DB 工具安装失败"
+            verify_failed=true
+        fi
+        
+        if [ "$verify_failed" = true ]; then
             return 1
         fi
         
