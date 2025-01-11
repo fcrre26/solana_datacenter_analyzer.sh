@@ -2019,7 +2019,7 @@ analyze_validators() {
             log "ERROR" "jq安装失败"
             return 1
         }
-    }
+    fi
     
     # 获取验证者列表
     local validator_ips
@@ -2152,6 +2152,9 @@ analyze_validators() {
     log "SUCCESS" "分析完成"
     return 0
 }
+
+
+
         
 # 并发处理函数
     process_ip() {
