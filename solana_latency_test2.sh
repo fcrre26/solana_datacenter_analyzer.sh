@@ -1949,6 +1949,46 @@ analyze_validators() {
         # 创建进度计数器
         echo "0" > "${TEMP_DIR}/counter"
         
+        # 使用 xargs 并发处理
+        cat "${TEMP_DIR}/tmp_ips.txt" | xargs -I {} -P "${MAX_CONCURRENT_JOBS:-10}" \
+            bash -c "process_ip {} \"$temp_results\" \"${TEMP_DIR}/counter\""
+        
+        # 等待所有任务完成
+        wait
+        
+        # 合并结果
+        cat "$temp_results" > "${RESULTS_FILE}"
+        
+        # 清理临时文件
+        rm -f "$temp_results"
+        
+    else
+        # 单线程处理
+        local counter=0
+        while IFS= read -r ip; do
+            ((counter++))
+            local latency=$(test_network_quality "$ip")
+            local provider_info=$(get_ip_info "$ip")
+            
+            local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
+            local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
+            local display_location="${cloud_provider}-${datacenter}"
+            
+            echo "$ip|$cloud_provider|$datacenter|$latency" >> "${RESULTS_FILE}"
+            
+            if [ "$background" = "false" ]; then
+                update_progress "$counter" "$total" "$ip" "$latency" "$display_location" "$cloud_provider"
+            fi
+        done < "${TEMP_DIR}/tmp_ips.txt"
+    fi
+    
+    # 生成报告
+    generate_report
+    
+    log "SUCCESS" "分析完成"
+    return 0
+}
+        
         # 并发处理函数
 process_ip() {
     local ip="$1"
@@ -2041,47 +2081,7 @@ process_ip() {
         } 201>"${TEMP_DIR}/display.lock"
     fi
 }
-        # 使用 xargs 并发处理
-        cat "${TEMP_DIR}/tmp_ips.txt" | xargs -I {} -P "${MAX_CONCURRENT_JOBS:-10}" \
-            bash -c "process_ip {} \"$temp_results\" \"${TEMP_DIR}/counter\""
         
-        # 等待所有任务完成
-        wait
-        
-        # 合并结果
-        cat "$temp_results" > "${RESULTS_FILE}"
-        
-        # 清理临时文件
-        rm -f "$temp_results"
-        
-    else
-        # 单线程处理
-        local counter=0
-        while IFS= read -r ip; do
-            ((counter++))
-            local latency=$(test_network_quality "$ip")
-            local provider_info=$(get_ip_info "$ip")
-            
-            local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
-            local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
-            local display_location="${cloud_provider}-${datacenter}"
-            
-            echo "$ip|$cloud_provider|$datacenter|$latency" >> "${RESULTS_FILE}"
-            
-            if [ "$background" = "false" ]; then
-                update_progress "$counter" "$total" "$ip" "$latency" "$display_location" "$cloud_provider"
-            fi
-        done < "${TEMP_DIR}/tmp_ips.txt"
-    fi
-    
-    # 生成报告
-    generate_report
-    
-    log "SUCCESS" "分析完成"
-    return 0
-}
-
-
 
 # 主函数
 main() {
