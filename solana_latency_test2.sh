@@ -1837,7 +1837,7 @@ analyze_validators() {
         echo "0" > "${TEMP_DIR}/counter"
         
         # 并发处理函数
-      process_ip() {
+     process_ip() {
     local ip="$1"
     local result_file="$2"
     local counter_file="$3"
@@ -1847,26 +1847,23 @@ analyze_validators() {
     
     # 获取延迟和IP信息
     local latency=$(test_network_quality "$ip")
-    local ip_info
-    ip_info=$(get_ip_info "$ip")
+    local provider_info=$(get_ip_info "$ip")
     
-    # 使用 jq 解析 JSON，提高可靠性
-    if [ -n "$ip_info" ] && echo "$ip_info" | jq -e . >/dev/null 2>&1; then
-        local provider=$(echo "$ip_info" | jq -r '.provider // "Unknown"')
-        local location=$(echo "$ip_info" | jq -r '.location // "Unknown"')
-        local provider_info=$(identify_provider "$provider" "$location")
-        
-        # 原子性写入结果
-        echo "$ip|$provider_info|$latency" > "$temp_result"
-        
-        # 使用 flock 确保原子性写入主结果文件
-        {
-            flock -x 200
-            cat "$temp_result" >> "$result_file"
-            current=$(cat "$counter_file")
-            echo $((current + 1)) > "$counter_file"
-        } 200>"${TEMP_DIR}/write.lock"
-    fi
+    # 解析供应商信息
+    local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
+    local region_code=$(echo "$provider_info" | cut -d'|' -f2)
+    local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
+    
+    # 原子性写入结果
+    echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" > "$temp_result"
+    
+    # 使用 flock 确保原子性写入主结果文件
+    {
+        flock -x 200
+        cat "$temp_result" >> "$result_file"
+        local current=$(cat "$counter_file")
+        echo $((current + 1)) > "$counter_file"
+    } 200>"${TEMP_DIR}/write.lock"
     
     # 清理临时文件
     rm -f "$temp_result"
@@ -1875,7 +1872,7 @@ analyze_validators() {
     if [ "$background" = "false" ]; then
         {
             flock -x 201
-            current=$(cat "$counter_file")
+            local current=$(cat "$counter_file")
             update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
         } 201>"${TEMP_DIR}/display.lock"
     fi
