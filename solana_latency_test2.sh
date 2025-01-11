@@ -1063,6 +1063,7 @@ get_validators() {
 }
 
 # 更新进度显示函数
+# 更新进度显示函数
 update_progress() {
     local current="$1"
     local total="$2"
@@ -1094,13 +1095,13 @@ update_progress() {
     fi
     
     # 保存格式化的分析记录
-    printf "%s | %-15s | %-8s | %-15s | %-30s | %d/%d\n" \
+    printf "%-8s | %-15s | %-8s | %-15s | %-20s | %s\n" \
         "$(date '+%H:%M:%S')" \
         "$ip" \
         "$latency_display" \
         "${provider:0:15}" \
-        "${location:0:30}" \
-        "$current" "$total" >> "${DETAILED_LOG}"
+        "${location:0:20}" \
+        "$current/$total" >> "${DETAILED_LOG}"
     
     # 每20行显示一次进度条和表头
     if [ $((current % 20)) -eq 1 ]; then
@@ -1118,34 +1119,28 @@ update_progress() {
             $((eta / 60)) $((eta % 60))
         
         # 打印表头
-        printf "${WHITE}%-10s | %-15s | %-8s | %-15s | %-30s | %-15s${NC}\n" \
+        printf "${WHITE}%-8s | %-15s | %-8s | %-15s | %-20s | %s${NC}\n" \
             "时间" "IP地址" "延迟" "供应商" "机房位置" "进度"
-        printf "${WHITE}%s${NC}\n" "$(printf '=%.0s' {1..100})"
-        
-        # 在详细日志中也添加表头
-        echo "----------------------------------------" >> "${DETAILED_LOG}"
-        printf "%-10s | %-15s | %-8s | %-15s | %-30s | %-15s\n" \
-            "时间" "IP地址" "延迟" "供应商" "机房位置" "进度" >> "${DETAILED_LOG}"
-        echo "========================================" >> "${DETAILED_LOG}"
+        printf "${WHITE}%s${NC}\n" "$(printf '=%.0s' {1..85})"
     fi
     
     # 显示当前行
     if [ $((current % 2)) -eq 0 ]; then
-        printf "${GREEN}%-8s${NC} | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15.15s | %-30.30s | ${GREEN}%d/%d${NC}\n" \
+        printf "${GREEN}%-8s${NC} | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15s | %-20s | %s\n" \
             "$(date '+%H:%M:%S')" \
             "$ip" \
             "$latency_display" \
             "${provider:0:15}" \
-            "${location:0:30}" \
-            "$current" "$total"
+            "${location:0:20}" \
+            "$current/$total"
     else
-        printf "${WHITE}%-8s${NC} | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15.15s | %-30.30s | ${GREEN}%d/%d${NC}\n" \
+        printf "${WHITE}%-8s${NC} | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15s | %-20s | %s\n" \
             "$(date '+%H:%M:%S')" \
             "$ip" \
             "$latency_display" \
             "${provider:0:15}" \
-            "${location:0:30}" \
-            "$current" "$total"
+            "${location:0:20}" \
+            "$current/$total"
     fi
 }
 
