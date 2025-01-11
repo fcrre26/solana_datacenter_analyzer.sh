@@ -84,45 +84,93 @@ API_CONFIG_FILE="${REPORT_DIR}/api_keys.conf"
 # 创建必要的目录
 mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
 
+# 更新进度显示函数
 update_progress() {
-    local current="$1"
-    local total="$2"
-    local ip="$3"
-    local latency="$4"
-    local location="$5"
+    local current="$1"    # 当前处理的节点数
+    local total="$2"      # 总节点数
+    local ip="$3"         # 当前处理的IP
+    local latency="$4"    # 延迟值
+    local location="$5"   # 位置信息
+    local provider="$6"   # 供应商信息
     
-    # 避免除零错误
-    local percent=0
-    if [ "$total" -gt 0 ]; then
-        percent=$((current * 100 / total))
-    fi
+    # 保存进度到文件
+    echo "${current}/${total}" > "${PROGRESS_FILE}"
     
-    # 计算处理速率和预计剩余时间
-    local elapsed=$(($(date +%s) - START_TIME))
-    local rate=0
-    local eta=0
+    # 计算进度百分比和时间
+    local progress=$((current * 100 / total))
+    local elapsed_time=$(($(date +%s) - ${START_TIME}))
+    local time_per_item=$((elapsed_time / (current > 0 ? current : 1)))
+    local remaining_items=$((total - current))
+    local eta=$((time_per_item * remaining_items))
     
-    if [ "$elapsed" -gt 0 ]; then
-        rate=$(bc <<< "scale=2; $current / $elapsed")
-        if [ "$(bc <<< "$rate > 0")" -eq 1 ]; then
-            eta=$(bc <<< "scale=0; ($total - $current) / $rate")
+    # 格式化延迟显示并设置颜色
+    local latency_display
+    local latency_color=$GREEN
+    if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        if [ "$(echo "$latency > 100" | bc -l)" -eq 1 ]; then
+            latency_color=$YELLOW
         fi
+        latency_display="${latency}ms"
+    else
+        latency_color=$RED
+        latency_display="超时"
     fi
     
-    # 进度条显示
-    printf "\r进度: [%-50s] %d%% (%d/%d) 速率: %.2f IP/s ETA: %ds" \
-        "$(printf '#%.0s' $(seq 1 $((percent / 2))))" \
-        "$percent" "$current" "$total" "$rate" "$eta"
+    # 保存详细分析记录到日志
+    printf "%s | %-15s | %-8s | %-15s | %-30s | %d/%d\n" \
+        "$(date '+%H:%M:%S')" \
+        "$ip" \
+        "$latency_display" \
+        "${provider:0:15}" \
+        "${location:0:30}" \
+        "$current" "$total" >> "${DETAILED_LOG}"
     
-    # 显示当前处理的IP信息
-    if [ "$latency" != "999" ]; then
-        printf " | 当前: %s (%s) - %sms" "$ip" "$location" "$latency"
+    # 每20行显示一次进度条和表头
+    if [ $((current % 20)) -eq 1 ]; then
+        # 打印总进度条
+        printf "\n["
+        for ((i=0; i<40; i++)); do
+            if [ $i -lt $((progress * 40 / 100)) ]; then
+                printf "${GREEN}█${NC}"
+            else
+                printf "█"
+            fi
+        done
+        printf "] ${GREEN}%3d%%${NC} | 已测试: ${GREEN}%d${NC}/${WHITE}%d${NC} | 预计剩余: ${WHITE}%dm%ds${NC}\n\n" \
+            "$progress" "$current" "$total" \
+            $((eta / 60)) $((eta % 60))
+        
+        # 打印表头
+        printf "${WHITE}%-10s | %-15s | %-8s | %-15s | %-30s | %-15s${NC}\n" \
+            "时间" "IP地址" "延迟" "供应商" "机房位置" "进度"
+        printf "${WHITE}%s${NC}\n" "$(printf '=%.0s' {1..100})"
+        
+        # 在详细日志中也添加表头
+        echo "----------------------------------------" >> "${DETAILED_LOG}"
+        printf "%-10s | %-15s | %-8s | %-15s | %-30s | %-15s\n" \
+            "时间" "IP地址" "延迟" "供应商" "机房位置" "进度" >> "${DETAILED_LOG}"
+        echo "========================================" >> "${DETAILED_LOG}"
     fi
     
-    # 处理完成时换行
-    [ "$current" -eq "$total" ] && echo
+    # 显示当前行(交替使用不同颜色)
+    if [ $((current % 2)) -eq 0 ]; then
+        printf "${GREEN}%-8s${NC} | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15.15s | %-30.30s | ${GREEN}%d/%d${NC}\n" \
+            "$(date '+%H:%M:%S')" \
+            "$ip" \
+            "$latency_display" \
+            "${provider:0:15}" \
+            "${location:0:30}" \
+            "$current" "$total"
+    else
+        printf "${WHITE}%-8s${NC} | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15.15s | %-30.30s | ${GREEN}%d/%d${NC}\n" \
+            "$(date '+%H:%M:%S')" \
+            "$ip" \
+            "$latency_display" \
+            "${provider:0:15}" \
+            "${location:0:30}" \
+            "$current" "$total"
+    fi
 }
-
 
 get_provider_from_asn() {
     local asn="$1"
