@@ -1942,6 +1942,25 @@ analyze_validators() {
     if [ "$parallel" = "true" ]; then
         log "INFO" "使用 ${MAX_CONCURRENT_JOBS:-10} 个并发任务"
         
+        # 导出必要的函数和变量，使子进程可以访问
+        export -f process_ip
+        export -f test_network_quality
+        export -f get_ip_info
+        export -f get_provider_from_asn
+        export -f log
+        export -f update_progress
+        
+        # 导出必要的变量
+        export TEMP_DIR
+        export BACKGROUND_MODE
+        export START_TIME
+        export total
+        export GREEN NC CYAN RED YELLOW WHITE
+        export RESULTS_FILE
+        export TEST_PORTS
+        export TIMEOUT_SECONDS
+        export RETRIES
+        
         # 创建临时结果文件
         local temp_results="${TEMP_DIR}/temp_results"
         : > "$temp_results"
@@ -1949,9 +1968,55 @@ analyze_validators() {
         # 创建进度计数器
         echo "0" > "${TEMP_DIR}/counter"
         
-        # 使用 xargs 并发处理
+        # 创建一个临时脚本文件，包含所有必要的函数
+        cat > "${TEMP_DIR}/worker.sh" <<'EOF'
+#!/bin/bash
+process_ip() {
+    local ip="$1"
+    local result_file="$2"
+    local counter_file="$3"
+    
+    # 使用临时文件存储结果
+    local temp_result="${TEMP_DIR}/results/${ip}.tmp"
+    
+    # 获取延迟和IP信息
+    local latency=$(test_network_quality "$ip")
+    local provider_info=$(get_ip_info "$ip")
+    
+    # 提取信息
+    local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
+    local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
+    local display_location="${cloud_provider}-${datacenter}"
+    
+    # 原子性写入结果
+    echo "$ip|$cloud_provider|$datacenter|$latency" > "$temp_result"
+    
+    # 使用 flock 确保原子性写入主结果文件
+    {
+        flock -x 200
+        cat "$temp_result" >> "$result_file"
+        local current=$(cat "$counter_file")
+        echo $((current + 1)) > "$counter_file"
+    } 200>"${TEMP_DIR}/write.lock"
+    
+    # 清理临时文件
+    rm -f "$temp_result"
+    
+    # 更新显示
+    if [ "$BACKGROUND_MODE" = "false" ]; then
+        {
+            flock -x 201
+            local current=$(cat "$counter_file")
+            update_progress "$current" "$total" "$ip" "$latency" "$display_location" "$cloud_provider"
+        } 201>"${TEMP_DIR}/display.lock"
+    fi
+}
+EOF
+        chmod +x "${TEMP_DIR}/worker.sh"
+        
+        # 使用 xargs 进行并发处理
         cat "${TEMP_DIR}/tmp_ips.txt" | xargs -I {} -P "${MAX_CONCURRENT_JOBS:-10}" \
-            bash -c "process_ip {} \"$temp_results\" \"${TEMP_DIR}/counter\""
+            bash "${TEMP_DIR}/worker.sh" {} "$temp_results" "${TEMP_DIR}/counter"
         
         # 等待所有任务完成
         wait
@@ -1960,7 +2025,7 @@ analyze_validators() {
         cat "$temp_results" > "${RESULTS_FILE}"
         
         # 清理临时文件
-        rm -f "$temp_results"
+        rm -f "$temp_results" "${TEMP_DIR}/worker.sh"
         
     else
         # 单线程处理
