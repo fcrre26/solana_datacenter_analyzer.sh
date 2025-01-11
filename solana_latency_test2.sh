@@ -1096,7 +1096,7 @@ update_progress() {
             $((eta / 60)) $((eta % 60))
         
         # 打印表头
-        printf "${WHITE}%-8s | %-15s | %-8s | %-15s | %-20s | %s${NC}\n" \
+        printf "${WHITE}%-8s | %-18s | %-8s | %-15s | %-20s | %s${NC}\n" \
             "时间" "IP地址" "延迟" "供应商" "机房位置" "进度"
         printf "${WHITE}%s${NC}\n" "$(printf '=%.0s' {1..85})"
     fi
