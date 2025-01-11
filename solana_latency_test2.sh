@@ -2012,6 +2012,15 @@ analyze_validators() {
     
     log "INFO" "开始分析验证者节点分布"
     
+    # 确保已安装jq
+    if ! command -v jq &>/dev/null; then
+        log "INFO" "正在安装jq..."
+        apt-get update -qq && apt-get install -y jq || {
+            log "ERROR" "jq安装失败"
+            return 1
+        }
+    }
+    
     # 获取验证者列表
     local validator_ips
     validator_ips=$(solana gossip | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u) || {
@@ -2052,16 +2061,31 @@ analyze_validators() {
                 latency=$(timeout "${TIMEOUT_SECONDS:-2}" ping -c 1 "$ip" 2>/dev/null | \
                          grep -oP 'time=\K[0-9.]+' || echo "999")
                 
-                # 获取IP信息
+                # 获取IP信息并解析
                 local ip_info=$(get_ip_info "$ip")
-                local cloud_provider=$(echo "$ip_info" | cut -d'|' -f1)
-                local datacenter=$(echo "$ip_info" | cut -d'|' -f2)
-                local location=$(echo "$ip_info" | cut -d'|' -f3)
+                local cloud_provider=$(echo "$ip_info" | jq -r '.provider // empty' 2>/dev/null || echo "Unknown")
+                local datacenter=$(echo "$ip_info" | jq -r '.location // empty' 2>/dev/null || echo "Unknown")
+                
+                # 处理ASN信息
+                if [[ "$cloud_provider" == "Unknown" ]]; then
+                    local asn=$(echo "$ip_info" | jq -r '.asn // empty' 2>/dev/null)
+                    if [ -n "$asn" ]; then
+                        cloud_provider=$(get_provider_from_asn "$asn")
+                    fi
+                fi
+                
+                # 清理和格式化数据中心信息
+                datacenter=$(echo "$datacenter" | sed 's/{"provider":"[^"]*","location":"//g' | sed 's/"[^"]*$//g')
+                
+                # 如果数据中心信息为空，使用供应商信息
+                if [[ -z "$datacenter" || "$datacenter" == "null" || "$datacenter" == "Unknown" ]]; then
+                    datacenter="$cloud_provider Datacenter"
+                fi
                 
                 # 原子性写入结果
                 {
                     flock -x 200
-                    echo "${ip}|${cloud_provider}|${datacenter}|${latency}|${location}" >> "${RESULTS_FILE}"
+                    echo "${ip}|${cloud_provider}|${datacenter}|${latency}" >> "${RESULTS_FILE}"
                     local current=$(($(cat "${TEMP_DIR}/counter") + 1))
                     echo "$current" > "${TEMP_DIR}/counter"
                     
@@ -2091,14 +2115,29 @@ analyze_validators() {
             latency=$(timeout "${TIMEOUT_SECONDS:-2}" ping -c 1 "$ip" 2>/dev/null | \
                      grep -oP 'time=\K[0-9.]+' || echo "999")
             
-            # 获取IP信息
+            # 获取IP信息并解析
             local ip_info=$(get_ip_info "$ip")
-            local cloud_provider=$(echo "$ip_info" | cut -d'|' -f1)
-            local datacenter=$(echo "$ip_info" | cut -d'|' -f2)
-            local location=$(echo "$ip_info" | cut -d'|' -f3)
+            local cloud_provider=$(echo "$ip_info" | jq -r '.provider // empty' 2>/dev/null || echo "Unknown")
+            local datacenter=$(echo "$ip_info" | jq -r '.location // empty' 2>/dev/null || echo "Unknown")
+            
+            # 处理ASN信息
+            if [[ "$cloud_provider" == "Unknown" ]]; then
+                local asn=$(echo "$ip_info" | jq -r '.asn // empty' 2>/dev/null)
+                if [ -n "$asn" ]; then
+                    cloud_provider=$(get_provider_from_asn "$asn")
+                fi
+            fi
+            
+            # 清理和格式化数据中心信息
+            datacenter=$(echo "$datacenter" | sed 's/{"provider":"[^"]*","location":"//g' | sed 's/"[^"]*$//g')
+            
+            # 如果数据中心信息为空，使用供应商信息
+            if [[ -z "$datacenter" || "$datacenter" == "null" || "$datacenter" == "Unknown" ]]; then
+                datacenter="$cloud_provider Datacenter"
+            fi
             
             # 写入结果
-            echo "${ip}|${cloud_provider}|${datacenter}|${latency}|${location}" >> "${RESULTS_FILE}"
+            echo "${ip}|${cloud_provider}|${datacenter}|${latency}" >> "${RESULTS_FILE}"
             
             if [ "$BACKGROUND_MODE" = "false" ]; then
                 update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
@@ -2114,8 +2153,8 @@ analyze_validators() {
     return 0
 }
         
-        # 并发处理函数
-process_ip() {
+# 并发处理函数
+    process_ip() {
     local ip="$1"
     local result_file="$2"
     local counter_file="$3"
