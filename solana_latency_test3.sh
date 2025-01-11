@@ -1585,6 +1585,7 @@ print_top_validators() {
 }
 
 # 生成分析报告
+# 生成分析报告
 generate_report() {
     local temp_report="${TEMP_DIR}/temp_report.txt"
     local results_file="${RESULTS_FILE}"
@@ -2035,6 +2036,12 @@ analyze_validators() {
     
     log "INFO" "开始分析验证者节点分布"
     
+    # 获取质押信息
+    if ! get_validator_stakes; then
+        log "ERROR" "获取质押信息失败"
+        return 1
+    }
+    
     # 确保已安装jq
     if ! command -v jq &>/dev/null; then
         log "INFO" "正在安装jq..."
@@ -2042,7 +2049,7 @@ analyze_validators() {
             log "ERROR" "jq安装失败"
             return 1
         }
-    fi
+    }
     
     # 获取验证者列表
     local validator_ips
@@ -2169,13 +2176,17 @@ analyze_validators() {
         done < "${TEMP_DIR}/tmp_ips.txt"
     fi
     
+    # 在分析完成后打印 TOP 50
+    if [ "$BACKGROUND_MODE" = "false" ]; then
+        print_top_validators "${RESULTS_FILE}"
+    fi
+    
     # 生成报告
     generate_report
     
     log "SUCCESS" "分析完成"
     return 0
 }
-
 
 
         
