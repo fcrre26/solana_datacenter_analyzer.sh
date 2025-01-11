@@ -1327,94 +1327,92 @@ identify_provider() {
 
 # 获取验证者信息
 get_validators() {
-    log "INFO" "正在获取验证者信息..."
+    local temp_file="${TEMP_DIR}/validators_temp.txt"
+    local retry_count=3
+    local success=false
     
-    local validators
-    validators=$(solana gossip 2>/dev/null) || {
-        log "ERROR" "无法获取验证者信息"
+    # 确保 Solana CLI 已安装且配置正确
+    if ! command -v solana &>/dev/null; then
+        log "ERROR" "Solana CLI 未安装"
         return 1
     }
-    
-    local ips
-    ips=$(echo "$validators" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u) || {
-        log "ERROR" "未找到验证者IP地址"
-        return 1
-    }
-    
-    echo "$ips"
-    return 0
-}
 
-# 更新进度显示函数
-update_progress() {
-    local current="$1"
-    local total="$2"
-    local ip="$3"
-    local latency="$4"
-    local location="$5"
-    local provider="$6"
+    # 检查 Solana 网络连接
+    if ! solana cluster-version &>/dev/null; then
+        log "ERROR" "无法连接到 Solana 网络，请检查网络连接"
+        return 1
+    }
     
-    # 保存进度
-    echo "${current}/${total}" > "${PROGRESS_FILE}"
-    
-    # 每20行显示一次进度条和表头
-    if [ $((current % 20)) -eq 1 ]; then
-        # 计算和显示总进度
-        local progress=$((current * 100 / total))
-        local elapsed_time=$(($(date +%s) - START_TIME))
-        local time_per_item=$((elapsed_time / (current > 0 ? current : 1)))
-        local remaining_items=$((total - current))
-        local eta=$((time_per_item * remaining_items))
+    # 尝试获取验证者列表
+    for ((i=1; i<=retry_count; i++)); do
+        log "INFO" "正在获取验证者列表 (尝试 $i/$retry_count)"
         
-        printf "\n["
-        for ((i=0; i<40; i++)); do
-            if [ $i -lt $((progress * 40 / 100)) ]; then
-                printf "${GREEN}█${NC}"
-            else
-                printf "█"
+        # 使用超时命令避免卡死
+        if timeout 30s solana gossip | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' > "$temp_file" 2>/dev/null; then
+            if [ -s "$temp_file" ]; then
+                local ip_count=$(wc -l < "$temp_file")
+                if [ "$ip_count" -gt 0 ]; then
+                    log "SUCCESS" "成功获取到 $ip_count 个验证者节点"
+                    success=true
+                    break
+                fi
+            fi
+        fi
+        
+        log "WARN" "尝试 $i 失败，等待重试..."
+        sleep 3
+    done
+    
+    if [ "$success" = false ]; then
+        log "ERROR" "无法获取验证者列表，请检查 Solana CLI 配置"
+        log "INFO" "可以尝试运行: solana config set --url https://api.mainnet-beta.solana.com"
+        return 1
+    fi
+    
+    # 过滤和处理 IP 列表
+    {
+        # 去重并过滤私有IP
+        sort -u "$temp_file" | \
+        grep -v '^10\.' | \
+        grep -v '^172\.\(1[6-9]\|2[0-9]\|3[0-1]\)\.' | \
+        grep -v '^192\.168\.' | \
+        grep -v '^127\.' | \
+        grep -v '^0\.' | \
+        grep -v '^169\.254\.' | \
+        grep -v '^224\.' | \
+        grep -v '^240\.' | \
+        while IFS= read -r ip; do
+            # 验证 IP 格式
+            if [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                # 检查每个段是否在有效范围内
+                local valid=true
+                IFS='.' read -r -a octets <<< "$ip"
+                for octet in "${octets[@]}"; do
+                    if [ "$octet" -gt 255 ]; then
+                        valid=false
+                        break
+                    fi
+                done
+                
+                if [ "$valid" = true ]; then
+                    echo "$ip"
+                fi
             fi
         done
-        printf "] ${GREEN}%3d%%${NC} | 已测试: ${GREEN}%d${NC}/${WHITE}%d${NC} | 预计剩余: ${WHITE}%dm%ds${NC}\n\n" \
-            "$progress" "$current" "$total" \
-            $((eta / 60)) $((eta % 60))
-        
-        # 打印表头
-        printf "${WHITE}%-10s |   %-15s | %-11s | %-18s | %-24s | %-10s${NC}\n" \
-            "时间" "IP地址" "延迟" "供应商" "机房位置" "进度"
-        printf "${WHITE}%s${NC}\n" "$(printf '=%.0s' {1..85})"
+    } > "${temp_file}.filtered"
+    
+    # 检查过滤后的结果
+    if [ ! -s "${temp_file}.filtered" ]; then
+        log "ERROR" "过滤后没有有效的验证者IP"
+        rm -f "$temp_file" "${temp_file}.filtered"
+        return 1
     fi
     
-    # 格式化延迟显示
-    local latency_display
-    local latency_color=$GREEN
-    if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        if [ "$(echo "$latency > 100" | bc -l)" -eq 1 ]; then
-            latency_color=$YELLOW
-        fi
-        latency_display="${latency}ms"
-    else
-        latency_color=$RED
-        latency_display="超时"
-    fi
+    # 输出结果
+    cat "${temp_file}.filtered"
     
-    # 显示当前行（交替颜色）
-    if [ $((current % 2)) -eq 0 ]; then
-        printf "${GREEN}%-8s${NC} | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15s | %-20s | %s\n" \
-            "$(date '+%H:%M:%S')" \
-            "$ip" \
-            "$latency_display" \
-            "${provider:0:15}" \
-            "${location:0:20}" \
-            "$current/$total"
-    else
-        printf "${WHITE}%-8s${NC} | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15s | %-20s | %s\n" \
-            "$(date '+%H:%M:%S')" \
-            "$ip" \
-            "$latency_display" \
-            "${provider:0:15}" \
-            "${location:0:20}" \
-            "$current/$total"
-    fi
+    # 清理临时文件
+    rm -f "$temp_file" "${temp_file}.filtered"
 }
 
 # 生成报告
