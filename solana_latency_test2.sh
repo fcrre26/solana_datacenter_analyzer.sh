@@ -833,7 +833,6 @@ EOF
     
     log "WARN" "ASN 数据库初始化失败，将使用基础识别方式"
     return 1
-}
 
     # 2. 初始化变量
     local provider="Unknown"
