@@ -933,32 +933,36 @@ init_ip_db
 # 测试网络质量
 test_network_quality() {
     local ip="$1"
-    local retries=${RETRIES:-2}
-    local timeout=${TIMEOUT_SECONDS:-2}
-    local total_time=0
-    local success_count=0
-    local ports=("${TEST_PORTS[@]:-8899 8900 8001 8000}")
+    local total_latency=0
+    local valid_tests=0
+    local min_latency=999999
     
-    for ((i=1; i<=retries; i++)); do
-        for port in "${ports[@]}"; do
+    # 对每个端口进行测试
+    for port in "${TEST_PORTS[@]}"; do
+        for ((i=1; i<=RETRIES; i++)); do
+            # 使用 nc 进行更精确的延迟测试
             local start_time=$(date +%s%N)
-            if timeout $timeout nc -zv "$ip" "$port" >/dev/null 2>&1; then
+            if timeout "$TIMEOUT_SECONDS" nc -zv "$ip" "$port" >/dev/null 2>&1; then
                 local end_time=$(date +%s%N)
-                local duration=$(( (end_time - start_time) / 1000000 ))
-                total_time=$((total_time + duration))
-                ((success_count++))
-                break
+                local latency=$(( (end_time - start_time) / 1000000 ))
+                
+                # 更新最小延迟
+                if [ "$latency" -lt "$min_latency" ]; then
+                    min_latency=$latency
+                fi
+                
+                ((valid_tests++))
+                total_latency=$((total_latency + latency))
             fi
         done
     done
     
-    if [ $success_count -gt 0 ]; then
-        printf "%.3f" "$(echo "scale=3; $total_time / $success_count" | bc -l)"
-        return 0
+    # 计算平均延迟
+    if [ "$valid_tests" -gt 0 ]; then
+        echo "scale=2; $total_latency / $valid_tests" | bc
+    else
+        echo "999"
     fi
-    
-    echo "999"
-    return 0
 }
 
 # 供应商识别函数
@@ -1833,38 +1837,49 @@ analyze_validators() {
         echo "0" > "${TEMP_DIR}/counter"
         
         # 并发处理函数
-        process_ip() {
-            local ip="$1"
-            local result_file="$2"
-            local counter_file="$3"
-            
-            local latency=$(test_network_quality "$ip")
-            local ip_info=$(get_ip_info "$ip")
-            local provider_info=$(identify_provider \
-                "$(echo "$ip_info" | jq -r '.org // "Unknown"')" \
-                "$(echo "$ip_info" | jq -r '.location // "Unknown"')")
-            
-            local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
-            local region_code=$(echo "$provider_info" | cut -d'|' -f2)
-            local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
-            
-            # 原子性写入结果
-            {
-                flock -x 200
-                echo "$ip|$cloud_provider|$datacenter|$latency|$region_code" >> "$result_file"
-                current=$(cat "$counter_file")
-                echo $((current + 1)) > "$counter_file"
-            } 200>"${TEMP_DIR}/write.lock"
-            
-            # 更新显示（使用临时文件存储当前进度）
-            if [ "$background" = "false" ]; then
-                {
-                    flock -x 201
-                    current=$(cat "$counter_file")
-                    update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
-                } 201>"${TEMP_DIR}/display.lock"
-            fi
-        }
+      process_ip() {
+    local ip="$1"
+    local result_file="$2"
+    local counter_file="$3"
+    
+    # 使用临时文件存储结果，避免竞争条件
+    local temp_result="${TEMP_DIR}/results/${ip}.tmp"
+    
+    # 获取延迟和IP信息
+    local latency=$(test_network_quality "$ip")
+    local ip_info
+    ip_info=$(get_ip_info "$ip")
+    
+    # 使用 jq 解析 JSON，提高可靠性
+    if [ -n "$ip_info" ] && echo "$ip_info" | jq -e . >/dev/null 2>&1; then
+        local provider=$(echo "$ip_info" | jq -r '.provider // "Unknown"')
+        local location=$(echo "$ip_info" | jq -r '.location // "Unknown"')
+        local provider_info=$(identify_provider "$provider" "$location")
+        
+        # 原子性写入结果
+        echo "$ip|$provider_info|$latency" > "$temp_result"
+        
+        # 使用 flock 确保原子性写入主结果文件
+        {
+            flock -x 200
+            cat "$temp_result" >> "$result_file"
+            current=$(cat "$counter_file")
+            echo $((current + 1)) > "$counter_file"
+        } 200>"${TEMP_DIR}/write.lock"
+    fi
+    
+    # 清理临时文件
+    rm -f "$temp_result"
+    
+    # 更新显示（使用临时文件存储当前进度）
+    if [ "$background" = "false" ]; then
+        {
+            flock -x 201
+            current=$(cat "$counter_file")
+            update_progress "$current" "$total" "$ip" "$latency" "$datacenter" "$cloud_provider"
+        } 201>"${TEMP_DIR}/display.lock"
+    fi
+}
         
         # 使用信号量控制并发
         local queue_size=${MAX_CONCURRENT_JOBS:-10}
