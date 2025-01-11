@@ -32,16 +32,27 @@ WHITE='\033[1;37m'      # 亮白色加粗
 GRAY='\033[0;37m'       # 灰色
 NC='\033[0m'            # 重置颜色
 
-# 在颜色定义之后添加
 # 确保目录和文件权限正确
 setup_directories() {
-    mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
-    chmod 755 "${TEMP_DIR}" "${REPORT_DIR}"
+    # 创建所有必要的目录
+    mkdir -p "${TEMP_DIR}" \
+             "${REPORT_DIR}" \
+             "${IP_DB_DIR}" \
+             "${IP_DB_CACHE_DIR}" \
+             "${ASN_DB_DIR}"
+    
+    # 设置目录权限
+    chmod 755 "${TEMP_DIR}" \
+             "${REPORT_DIR}" \
+             "${IP_DB_DIR}" \
+             "${IP_DB_CACHE_DIR}" \
+             "${ASN_DB_DIR}"
     
     # 确保日志文件存在且可写
     touch "${LOG_FILE}" "${BACKGROUND_LOG}"
     chmod 644 "${LOG_FILE}" "${BACKGROUND_LOG}"
 }
+
 
 # 标识符定义
 INFO="[INFO]"
@@ -73,6 +84,44 @@ API_CONFIG_FILE="${REPORT_DIR}/api_keys.conf"
 # 创建必要的目录
 mkdir -p "${TEMP_DIR}" "${REPORT_DIR}"
 
+update_progress() {
+    local current="$1"
+    local total="$2"
+    local ip="$3"
+    local latency="$4"
+    local location="$5"
+    
+    # 避免除零错误
+    local percent=0
+    if [ "$total" -gt 0 ]; then
+        percent=$((current * 100 / total))
+    fi
+    
+    # 计算处理速率和预计剩余时间
+    local elapsed=$(($(date +%s) - START_TIME))
+    local rate=0
+    local eta=0
+    
+    if [ "$elapsed" -gt 0 ]; then
+        rate=$(bc <<< "scale=2; $current / $elapsed")
+        if [ "$(bc <<< "$rate > 0")" -eq 1 ]; then
+            eta=$(bc <<< "scale=0; ($total - $current) / $rate")
+        fi
+    fi
+    
+    # 进度条显示
+    printf "\r进度: [%-50s] %d%% (%d/%d) 速率: %.2f IP/s ETA: %ds" \
+        "$(printf '#%.0s' $(seq 1 $((percent / 2))))" \
+        "$percent" "$current" "$total" "$rate" "$eta"
+    
+    # 显示当前处理的IP信息
+    if [ "$latency" != "999" ]; then
+        printf " | 当前: %s (%s) - %sms" "$ip" "$location" "$latency"
+    fi
+    
+    # 处理完成时换行
+    [ "$current" -eq "$total" ] && echo
+}
 
 
 get_provider_from_asn() {
@@ -1914,6 +1963,7 @@ show_config_menu() {
 }
 
 # 分析验证者节点
+# 分析验证者节点
 analyze_validators() {
     local background="${1:-false}"
     local parallel="${2:-false}"
@@ -1938,92 +1988,40 @@ analyze_validators() {
     
     if [ "$parallel" = "true" ]; then
         log "INFO" "使用 ${MAX_CONCURRENT_JOBS:-10} 个并发任务"
-        
-        # 导出必要的函数和变量，使子进程可以访问
-        export -f process_ip
+        # 导出必要的函数
+        export -f update_progress
         export -f test_network_quality
         export -f get_ip_info
-        export -f get_provider_from_asn
         export -f log
-        export -f update_progress
-        
-        # 导出必要的变量
-        export TEMP_DIR
-        export BACKGROUND_MODE
-        export START_TIME
-        export total
-        export GREEN NC CYAN RED YELLOW WHITE
-        export RESULTS_FILE
-        export TEST_PORTS
-        export TIMEOUT_SECONDS
-        export RETRIES
-        
-        # 创建临时结果文件
-        local temp_results="${TEMP_DIR}/temp_results"
-        : > "$temp_results"
+        export -f get_provider_from_asn
         
         # 创建进度计数器
         echo "0" > "${TEMP_DIR}/counter"
         
-        # 创建一个临时脚本文件，包含所有必要的函数
-        cat > "${TEMP_DIR}/worker.sh" <<'EOF'
-#!/bin/bash
-process_ip() {
-    local ip="$1"
-    local result_file="$2"
-    local counter_file="$3"
-    
-    # 使用临时文件存储结果
-    local temp_result="${TEMP_DIR}/results/${ip}.tmp"
-    
-    # 获取延迟和IP信息
-    local latency=$(test_network_quality "$ip")
-    local provider_info=$(get_ip_info "$ip")
-    
-    # 提取信息
-    local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
-    local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
-    local display_location="${cloud_provider}-${datacenter}"
-    
-    # 原子性写入结果
-    echo "$ip|$cloud_provider|$datacenter|$latency" > "$temp_result"
-    
-    # 使用 flock 确保原子性写入主结果文件
-    {
-        flock -x 200
-        cat "$temp_result" >> "$result_file"
-        local current=$(cat "$counter_file")
-        echo $((current + 1)) > "$counter_file"
-    } 200>"${TEMP_DIR}/write.lock"
-    
-    # 清理临时文件
-    rm -f "$temp_result"
-    
-    # 更新显示
-    if [ "$BACKGROUND_MODE" = "false" ]; then
-        {
-            flock -x 201
-            local current=$(cat "$counter_file")
-            update_progress "$current" "$total" "$ip" "$latency" "$display_location" "$cloud_provider"
-        } 201>"${TEMP_DIR}/display.lock"
-    fi
-}
-EOF
-        chmod +x "${TEMP_DIR}/worker.sh"
-        
-        # 使用 xargs 进行并发处理
-        cat "${TEMP_DIR}/tmp_ips.txt" | xargs -I {} -P "${MAX_CONCURRENT_JOBS:-10}" \
-            bash "${TEMP_DIR}/worker.sh" {} "$temp_results" "${TEMP_DIR}/counter"
-        
-        # 等待所有任务完成
-        wait
-        
-        # 合并结果
-        cat "$temp_results" > "${RESULTS_FILE}"
-        
-        # 清理临时文件
-        rm -f "$temp_results" "${TEMP_DIR}/worker.sh"
-        
+        # 并发处理
+        cat "${TEMP_DIR}/tmp_ips.txt" | xargs -I {} -P "${MAX_CONCURRENT_JOBS:-10}" bash -c '
+            ip="$1"
+            counter_file="${TEMP_DIR}/counter"
+            results_file="${RESULTS_FILE}"
+            
+            latency=$(test_network_quality "$ip")
+            provider_info=$(get_ip_info "$ip")
+            
+            cloud_provider=$(echo "$provider_info" | cut -d"|" -f1)
+            datacenter=$(echo "$provider_info" | cut -d"|" -f3)
+            display_location="${cloud_provider}-${datacenter}"
+            
+            echo "$ip|$cloud_provider|$datacenter|$latency" >> "$results_file"
+            
+            # 更新计数器
+            current=$(($(cat "$counter_file") + 1))
+            echo "$current" > "$counter_file"
+            
+            # 更新进度显示
+            if [ "$BACKGROUND_MODE" = "false" ]; then
+                update_progress "$current" "$total" "$ip" "$latency" "$display_location"
+            fi
+        ' -- {}
     else
         # 单线程处理
         local counter=0
@@ -2039,7 +2037,7 @@ EOF
             echo "$ip|$cloud_provider|$datacenter|$latency" >> "${RESULTS_FILE}"
             
             if [ "$background" = "false" ]; then
-                update_progress "$counter" "$total" "$ip" "$latency" "$display_location" "$cloud_provider"
+                update_progress "$counter" "$total" "$ip" "$latency" "$display_location"
             fi
         done < "${TEMP_DIR}/tmp_ips.txt"
     fi
@@ -2154,6 +2152,9 @@ main() {
         exit 1
     fi
     
+    # 确保目录结构正确
+    setup_directories
+   
     # 设置目录
     setup_directories
     
@@ -2171,6 +2172,8 @@ main() {
     fi
     
     touch "$LOCK_FILE"
+
+
     
     # 初始化所有必要组件
     check_dependencies || exit 1
