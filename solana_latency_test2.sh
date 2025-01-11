@@ -1063,7 +1063,6 @@ get_validators() {
 }
 
 # 更新进度显示函数
-# 更新进度显示函数
 update_progress() {
     local current="$1"
     local total="$2"
@@ -1075,37 +1074,15 @@ update_progress() {
     # 保存进度
     echo "${current}/${total}" > "${PROGRESS_FILE}"
     
-    local progress=$((current * 100 / total))
-    local elapsed_time=$(($(date +%s) - ${START_TIME}))
-    local time_per_item=$((elapsed_time / (current > 0 ? current : 1)))
-    local remaining_items=$((total - current))
-    local eta=$((time_per_item * remaining_items))
-    
-    # 格式化延迟显示
-    local latency_display
-    local latency_color=$GREEN
-    if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        if [ "$(echo "$latency > 100" | bc -l)" -eq 1 ]; then
-            latency_color=$YELLOW
-        fi
-        latency_display="${latency}ms"
-    else
-        latency_color=$RED
-        latency_display="超时"
-    fi
-    
-    # 保存格式化的分析记录
-    printf "%-8s | %-15s | %-8s | %-15s | %-20s | %s\n" \
-        "$(date '+%H:%M:%S')" \
-        "$ip" \
-        "$latency_display" \
-        "${provider:0:15}" \
-        "${location:0:20}" \
-        "$current/$total" >> "${DETAILED_LOG}"
-    
     # 每20行显示一次进度条和表头
     if [ $((current % 20)) -eq 1 ]; then
-        # 打印总进度
+        # 计算和显示总进度
+        local progress=$((current * 100 / total))
+        local elapsed_time=$(($(date +%s) - START_TIME))
+        local time_per_item=$((elapsed_time / (current > 0 ? current : 1)))
+        local remaining_items=$((total - current))
+        local eta=$((time_per_item * remaining_items))
+        
         printf "\n["
         for ((i=0; i<40; i++)); do
             if [ $i -lt $((progress * 40 / 100)) ]; then
@@ -1124,7 +1101,20 @@ update_progress() {
         printf "${WHITE}%s${NC}\n" "$(printf '=%.0s' {1..85})"
     fi
     
-    # 显示当前行
+    # 格式化延迟显示
+    local latency_display
+    local latency_color=$GREEN
+    if [[ "$latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        if [ "$(echo "$latency > 100" | bc -l)" -eq 1 ]; then
+            latency_color=$YELLOW
+        fi
+        latency_display="${latency}ms"
+    else
+        latency_color=$RED
+        latency_display="超时"
+    fi
+    
+    # 显示当前行（交替颜色）
     if [ $((current % 2)) -eq 0 ]; then
         printf "${GREEN}%-8s${NC} | ${CYAN}%-15s${NC} | ${latency_color}%-8s${NC} | %-15s | %-20s | %s\n" \
             "$(date '+%H:%M:%S')" \
