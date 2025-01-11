@@ -1168,31 +1168,6 @@ test_network_quality() {
     fi
 }
 
-# 验证者节点识别函数
-is_validator_node() {
-    local ip="$1"
-    local result=false
-    
-    # 检查 gossip 端口 (8000)
-    if nc -z -w2 "$ip" 8000 2>/dev/null; then
-        # 获取节点信息
-        local node_info
-        node_info=$(timeout 5s solana gossip --entrypoint "$ip:8000" 2>/dev/null)
-        
-        # 检查是否包含投票账户信息
-        if echo "$node_info" | grep -q "vote pubkey"; then
-            result=true
-        fi
-        
-        # 检查验证者特有端口 8001（TPU）
-        if [ "$result" = "false" ] && nc -z -w2 "$ip" 8001 2>/dev/null; then
-            result=true
-        fi
-    fi
-    
-    echo "$result"
-}
-
 # 供应商识别函数
 identify_provider() {
     local provider="$1"   # 供应商名称
@@ -1443,50 +1418,67 @@ identify_provider() {
 # 获取验证者信息
 get_validators() {
     local temp_file="${TEMP_DIR}/validators_temp.txt"
+    local json_file="${TEMP_DIR}/validators.json"
+    local filtered_file="${TEMP_DIR}/validators_filtered.txt"
     local retry_count=3
     local success=false
     
-    # 确保 Solana CLI 已安装且配置正确
+    log "INFO" "开始获取验证者节点列表..."
+    
+    # 确保目录存在
+    mkdir -p "${TEMP_DIR}"
+    
+    # 检查 Solana CLI
     if ! command -v solana &>/dev/null; then
         log "ERROR" "Solana CLI 未安装"
         return 1
-    fi  # <-- 添加了这个缺失的 fi
-
-    # 检查 Solana 网络连接
-    if ! solana cluster-version &>/dev/null; then
-        log "ERROR" "无法连接到 Solana 网络，请检查网络连接"
-        return 1
     fi
+    
+    # 检查网络连接
+    if ! solana cluster-version &>/dev/null; then
+        log "ERROR" "无法连接到 Solana 网络"
+        return 1
+    }
     
     # 尝试获取验证者列表
     for ((i=1; i<=retry_count; i++)); do
-        log "INFO" "正在获取验证者列表 (尝试 $i/$retry_count)"
+        log "INFO" "正在获取验证者列表 (尝试 $i/$retry_count)..."
         
-        # 使用超时命令避免卡死
-        if timeout 30s solana gossip | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' > "$temp_file" 2>/dev/null; then
-            if [ -s "$temp_file" ]; then
-                local ip_count=$(wc -l < "$temp_file")
-                if [ "$ip_count" -gt 0 ]; then
-                    log "SUCCESS" "成功获取到 $ip_count 个验证者节点"
+        # 获取完整的验证者信息
+        if solana validators --output json-compact > "$json_file" 2>/dev/null; then
+            if [ -s "$json_file" ]; then
+                # 提取验证者信息
+                jq -r '.validators[] | 
+                    select(.identityAddress != null and 
+                           .activated != "0" and 
+                           .delinquent == false) |
+                    .ipAddress' "$json_file" | \
+                grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' > "$temp_file"
+                
+                local validator_count=$(wc -l < "$temp_file")
+                if [ "$validator_count" -gt 0 ]; then
+                    log "SUCCESS" "成功获取到 $validator_count 个验证者节点"
                     success=true
                     break
                 fi
             fi
         fi
         
-        log "WARN" "尝试 $i 失败，等待重试..."
+        log "WARN" "尝试失败，3秒后重试..."
         sleep 3
     done
     
     if [ "$success" = false ]; then
-        log "ERROR" "无法获取验证者列表，请检查 Solana CLI 配置"
-        log "INFO" "可以尝试运行: solana config set --url https://api.mainnet-beta.solana.com"
+        log "ERROR" "无法获取验证者列表"
+        rm -f "$temp_file" "$json_file"
         return 1
     fi
     
-    # 过滤和处理 IP 列表
+    # 过滤和验证 IP 列表
     {
-        # 去重并过滤私有IP
+        log "INFO" "正在过滤和验证 IP 地址..."
+        
+        # 过滤私有IP和特殊IP
         sort -u "$temp_file" | \
         grep -v '^10\.' | \
         grep -v '^172\.\(1[6-9]\|2[0-9]\|3[0-1]\)\.' | \
@@ -1499,36 +1491,108 @@ get_validators() {
         while IFS= read -r ip; do
             # 验证 IP 格式
             if [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                # 检查每个段是否在有效范围内
+                # 验证 IP 段
                 local valid=true
                 IFS='.' read -r -a octets <<< "$ip"
                 for octet in "${octets[@]}"; do
-                    if [ "$octet" -gt 255 ]; then
+                    if ! [[ "$octet" =~ ^[0-9]+$ ]] || [ "$octet" -gt 255 ]; then
                         valid=false
                         break
                     fi
                 done
                 
                 if [ "$valid" = true ]; then
-                    echo "$ip"
+                    # 验证是否为活跃验证者
+                    if jq -e --arg ip "$ip" '.validators[] | 
+                        select(.ipAddress | contains($ip) and 
+                               .activated != "0" and 
+                               .delinquent == false)' "$json_file" >/dev/null; then
+                        # 验证端口可访问性
+                        if timeout 2 bash -c "echo >/dev/tcp/$ip/8899" 2>/dev/null; then
+                            echo "$ip"
+                        fi
+                    fi
                 fi
             fi
         done
-    } > "${temp_file}.filtered"
+    } > "$filtered_file"
     
     # 检查过滤后的结果
-    if [ ! -s "${temp_file}.filtered" ]; then
-        log "ERROR" "过滤后没有有效的验证者IP"
-        rm -f "$temp_file" "${temp_file}.filtered"
+    local final_count=$(wc -l < "$filtered_file")
+    if [ "$final_count" -eq 0 ]; then
+        log "ERROR" "过滤后没有有效的验证者节点"
+        rm -f "$temp_file" "$json_file" "$filtered_file"
         return 1
     fi
     
+    log "SUCCESS" "最终获取到 $final_count 个有效验证者节点"
+    
     # 输出结果
-    cat "${temp_file}.filtered"
+    cat "$filtered_file"
     
     # 清理临时文件
-    rm -f "$temp_file" "${temp_file}.filtered"
-    } # <-- 添加了这个缺失的闭合大括号
+    rm -f "$temp_file" "$json_file" "$filtered_file"
+    
+    return 0
+}
+
+# 验证者节点信息获取函数
+get_validator_info() {
+    local ip="$1"
+    local info_file="${TEMP_DIR}/validator_info_${ip}.json"
+    
+    # 获取验证者详细信息
+    if solana validator-info get --output json "$ip" > "$info_file" 2>/dev/null; then
+        if [ -s "$info_file" ]; then
+            local name=$(jq -r '.name // "Unknown"' "$info_file")
+            local keybase=$(jq -r '.keybaseUsername // "None"' "$info_file")
+            local website=$(jq -r '.website // "None"' "$info_file")
+            
+            echo "名称: $name"
+            echo "Keybase: $keybase"
+            echo "网站: $website"
+        else
+            echo "无法获取验证者信息"
+        fi
+        rm -f "$info_file"
+    else
+        echo "节点未提供详细信息"
+    fi
+}
+
+# 验证者状态检查函数
+check_validator_status() {
+    local ip="$1"
+    local status_file="${TEMP_DIR}/validator_status_${ip}.json"
+    
+    # 获取验证者状态
+    if solana validators --output json-compact > "$status_file" 2>/dev/null; then
+        if [ -s "$status_file" ]; then
+            local status=$(jq --arg ip "$ip" '.validators[] | 
+                select(.ipAddress | contains($ip)) | 
+                {
+                    "activated": .activated,
+                    "delinquent": .delinquent,
+                    "version": .version,
+                    "commission": .commission
+                }' "$status_file")
+            
+            if [ -n "$status" ]; then
+                echo "$status" | jq -r '. | 
+                    "状态: " + (if .delinquent then "离线" else "在线" end) + "\n" +
+                    "投票权重: " + .activated + "\n" +
+                    "版本: " + .version + "\n" +
+                    "佣金: " + (.commission | tostring) + "%"'
+            else
+                echo "未找到节点状态信息"
+            fi
+        fi
+        rm -f "$status_file"
+    else
+        echo "无法获取节点状态"
+    fi
+}
+
 
 # 生成分析报告
 generate_report() {
@@ -1985,6 +2049,7 @@ show_config_menu() {
 }
 
 # 分析验证者节点
+# 分析验证者节点
 analyze_validators() {
     local background="${1:-false}"
     local parallel="${2:-false}"
@@ -2001,31 +2066,20 @@ analyze_validators() {
         }
     fi
     
-    # 获取所有节点列表
-    local all_nodes
-    all_nodes=$(solana gossip | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u) || {
-        log "ERROR" "获取节点信息失败"
+    # 获取验证者列表
+    local validator_ips
+    validator_ips=$(solana gossip | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u) || {
+        log "ERROR" "获取验证者信息失败"
         return 1
     }
-    
-    # 过滤验证者节点
-    local validator_ips=""
-    log "INFO" "正在识别验证者节点..."
-    while IFS= read -r ip; do
-        if [ "$(is_validator_node "$ip")" = "true" ]; then
-            validator_ips+="$ip"$'\n'
-            log "INFO" "找到验证者节点: $ip"
-        fi
-    done <<< "$all_nodes"
     
     # 创建临时目录和文件
     mkdir -p "${TEMP_DIR}/results"
     : > "${RESULTS_FILE}"
-    echo -n "$validator_ips" > "${TEMP_DIR}/tmp_ips.txt"
+    echo "$validator_ips" > "${TEMP_DIR}/tmp_ips.txt"
     
     local total=$(wc -l < "${TEMP_DIR}/tmp_ips.txt")
     START_TIME=$(date +%s)
-    log "INFO" "共找到 $total 个验证者节点"
     
     if [ "$parallel" = "true" ]; then
         log "INFO" "使用 ${MAX_CONCURRENT_JOBS:-10} 个并发任务"
@@ -2331,3 +2385,4 @@ main() {
 }
 # 启动程序
 main "$@"
+
