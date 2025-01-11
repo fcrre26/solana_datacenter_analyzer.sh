@@ -1963,7 +1963,6 @@ show_config_menu() {
 }
 
 # 分析验证者节点
-# 分析验证者节点
 analyze_validators() {
     local background="${1:-false}"
     local parallel="${2:-false}"
@@ -1988,40 +1987,44 @@ analyze_validators() {
     
     if [ "$parallel" = "true" ]; then
         log "INFO" "使用 ${MAX_CONCURRENT_JOBS:-10} 个并发任务"
-        # 导出必要的函数
-        export -f update_progress
+        
+        # 导出必要的变量和函数
+        export TEMP_DIR RESULTS_FILE START_TIME BACKGROUND_MODE
         export -f test_network_quality
         export -f get_ip_info
         export -f log
+        export -f update_progress
         export -f get_provider_from_asn
         
         # 创建进度计数器
         echo "0" > "${TEMP_DIR}/counter"
         
         # 并发处理
-        cat "${TEMP_DIR}/tmp_ips.txt" | xargs -I {} -P "${MAX_CONCURRENT_JOBS:-10}" bash -c '
+        parallel -j "${MAX_CONCURRENT_JOBS:-10}" --bar '
             ip="$1"
             counter_file="${TEMP_DIR}/counter"
-            results_file="${RESULTS_FILE}"
             
+            # 获取延迟和IP信息
             latency=$(test_network_quality "$ip")
             provider_info=$(get_ip_info "$ip")
             
+            # 解析结果
             cloud_provider=$(echo "$provider_info" | cut -d"|" -f1)
-            datacenter=$(echo "$provider_info" | cut -d"|" -f3)
-            display_location="${cloud_provider}-${datacenter}"
+            datacenter=$(echo "$provider_info" | cut -d"|" -f2)
             
-            echo "$ip|$cloud_provider|$datacenter|$latency" >> "$results_file"
-            
-            # 更新计数器
-            current=$(($(cat "$counter_file") + 1))
-            echo "$current" > "$counter_file"
-            
-            # 更新进度显示
-            if [ "$BACKGROUND_MODE" = "false" ]; then
-                update_progress "$current" "$total" "$ip" "$latency" "$display_location"
-            fi
-        ' -- {}
+            # 原子性写入结果
+            {
+                flock -x 200
+                echo "${ip}|${cloud_provider}|${datacenter}|${latency}" >> "${RESULTS_FILE}"
+                current=$(($(cat "$counter_file") + 1))
+                echo "$current" > "$counter_file"
+                
+                if [ "$BACKGROUND_MODE" = "false" ]; then
+                    update_progress "$current" "$total" "$ip" "$latency" "${cloud_provider}-${datacenter}"
+                fi
+            } 200>"${TEMP_DIR}/lock"
+        ' ::: $(cat "${TEMP_DIR}/tmp_ips.txt")
+        
     else
         # 单线程处理
         local counter=0
@@ -2031,13 +2034,12 @@ analyze_validators() {
             local provider_info=$(get_ip_info "$ip")
             
             local cloud_provider=$(echo "$provider_info" | cut -d'|' -f1)
-            local datacenter=$(echo "$provider_info" | cut -d'|' -f3)
-            local display_location="${cloud_provider}-${datacenter}"
+            local datacenter=$(echo "$provider_info" | cut -d'|' -f2)
             
-            echo "$ip|$cloud_provider|$datacenter|$latency" >> "${RESULTS_FILE}"
+            echo "${ip}|${cloud_provider}|${datacenter}|${latency}" >> "${RESULTS_FILE}"
             
             if [ "$background" = "false" ]; then
-                update_progress "$counter" "$total" "$ip" "$latency" "$display_location"
+                update_progress "$counter" "$total" "$ip" "$latency" "${cloud_provider}-${datacenter}"
             fi
         done < "${TEMP_DIR}/tmp_ips.txt"
     fi
