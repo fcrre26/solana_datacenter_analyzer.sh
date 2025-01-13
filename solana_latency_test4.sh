@@ -1824,10 +1824,17 @@ show_provider_stats_menu() {
 # 供应商统计分析函数
 analyze_provider() {
     local provider="$1"
+    local is_top10="${2:-false}"
     local results_file="${REPORT_DIR}/validator_locations.txt"
     local timestamp=$(date +%Y%m%d_%H%M%S)
-    local stats_output="${REPORT_DIR}/top10_providers_stats.txt"
-    local is_top10="${2:-false}"
+    local stats_output
+    
+    # 根据模式决定输出文件
+    if [ "$is_top10" = "true" ]; then
+        stats_output="${REPORT_DIR}/top10_providers_stats_${timestamp}.txt"
+    else
+        stats_output="${REPORT_DIR}/provider_stats_${provider}_${timestamp}.txt"
+    fi
     
     # 检查数据文件是否存在
     if [ ! -f "$results_file" ]; then
@@ -1842,18 +1849,18 @@ analyze_provider() {
         return 1
     fi
     
-    # 如果不是 TOP 10 分析，则创建单独的输出文件
-    if [ "$is_top10" != "true" ]; then
-        stats_output="${REPORT_DIR}/provider_stats_${provider}_${timestamp}.txt"
+    # 如果不是 TOP 10 或者是第一个供应商，创建新文件
+    if [ "$is_top10" != "true" ] || [ ! -f "$stats_output" ]; then
         {
-            echo "【${provider} 节点分布详细统计】"
+            echo "【供应商节点分布统计】"
             echo "================================"
             echo
             echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')"
             echo
-            echo "供应商总节点数: ${total_nodes}"
-            echo
         } > "$stats_output"
+    else
+        # TOP 10 模式下追加分隔符
+        echo -e "\n\n【${provider}】\n" >> "$stats_output"
     fi
     
     # 定义固定的列宽
@@ -1870,18 +1877,19 @@ analyze_provider() {
     
     # 输出到终端和文件的函数
     output() {
-        echo "$1" | tee -a "$stats_output"
+        if [ "$is_top10" = "true" ]; then
+            echo "$1" >> "$stats_output"
+        else
+            echo "$1" | tee -a "$stats_output"
+        fi
     }
     
-    # 如果是第一个供应商或非TOP10，输出表头
-    if [ "$is_top10" != "true" ] || [ ! -s "$stats_output" ]; then
-        output "$header"
-        output "$separator"
-    fi
+    output "$header"
+    output "$separator"
 
     # 使用 awk 进行统计并排序
     grep "$provider" "$results_file" | \
-    awk -F'|' -v total="$total_nodes" '{
+    awk -F'|' -v total="$total_nodes" -v provider="$provider" '{
         dc = $3
         latency = $4
         count[dc]++
@@ -1892,11 +1900,11 @@ analyze_provider() {
         for (dc in count) {
             avg = latency_sum[dc]/count[dc]
             percentage = (count[dc]/total)*100
-            printf "%s|%d|%.2f|%.2f|%.2f|%.2f\n", 
-                dc, count[dc], avg, min[dc], max[dc], percentage
+            printf "%s|%s|%d|%.2f|%.2f|%.2f|%.2f\n", 
+                provider, dc, count[dc], avg, min[dc], max[dc], percentage
         }
-    }' | sort -t'|' -k2,2nr | \
-    while IFS='|' read -r dc count avg min max percentage; do
+    }' | sort -t'|' -k3,3nr | \
+    while IFS='|' read -r prov dc count avg min max percentage; do
         # 根据延迟设置颜色
         if [ "$(echo "$avg < 100" | bc -l)" -eq 1 ]; then
             color=$GREEN
@@ -1907,11 +1915,11 @@ analyze_provider() {
         fi
 
         printf "%-${prov_width}s | %-${dc_width}s |  %${num_width}d | ${color}%${lat_width}.2fms${NC} | ${GREEN}%${lat_width}.2fms${NC} | ${RED}%${lat_width}.2fms${NC} | %${pct_width}.2f%%\n" \
-            "${provider:0:$prov_width}" "${dc:0:$dc_width}" "$count" "$avg" "$min" "$max" "$percentage" | tee -a "$stats_output"
+            "${prov:0:$prov_width}" "${dc:0:$dc_width}" "$count" "$avg" "$min" "$max" "$percentage" | tee -a "$stats_output"
     done
 
     # 计算整体统计
-    output "\n${WHITE}整体统计:${NC}"
+    output "\n整体统计:"
     grep "$provider" "$results_file" | \
     awk -F'|' '{
         latency = $4
@@ -1926,33 +1934,13 @@ analyze_provider() {
         output "$line"
     done
 
-    # 如果不是 TOP 10 分析，添加文件位置提示
+    # 只在非 TOP 10 模式下显示文件保存信息
     if [ "$is_top10" != "true" ]; then
         echo -e "\n${GREEN}统计报告已保存到: ${WHITE}${stats_output}${NC}"
         local latest_link="${REPORT_DIR}/latest_${provider}_stats.txt"
         ln -sf "$stats_output" "$latest_link"
         echo -e "${GREEN}最新报告链接: ${WHITE}${latest_link}${NC}\n"
     fi
-}
-
-# 监控后台任务进度
-monitor_background_progress() {
-    if [ ! -f "${BACKGROUND_LOG}" ]; then
-        log "WARN" "没有运行中的后台任务"
-        return 1
-    fi
-    
-    clear
-    echo -e "\n${GREEN}正在监控后台任务 (按 Ctrl+C 退出监控)${NC}"
-    echo -e "${GREEN}===================${NC}\n"
-    
-    # 使用 trap 捕获 Ctrl+C
-    trap 'echo -e "\n${GREEN}退出监控${NC}"; return 0' INT
-    
-    tail -f "${BACKGROUND_LOG}"
-    
-    # 重置 trap
-    trap - INT
 }
 
 # 停止后台任务
