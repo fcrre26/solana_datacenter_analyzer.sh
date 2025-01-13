@@ -1856,6 +1856,8 @@ show_provider_stats() {
     }
     
     function get_latency_color(latency) {
+        # 将延迟值转换为数值进行比较
+        latency = latency + 0
         if (latency <= 50) return GREEN
         else if (latency <= 100) return WHITE
         else if (latency <= 200) return YELLOW
@@ -1868,6 +1870,9 @@ show_provider_stats() {
             latency = $3
             gsub(/ms/, "", latency)
             gsub(/^[ \t]+|[ \t]+$/, "", location)
+            
+            # 确保延迟是数值
+            latency = latency + 0
             
             split($6, progress, "/")
             total_nodes = progress[2]
@@ -1910,6 +1915,12 @@ show_provider_stats() {
             avg = sum_latency[loc] / count[loc]
             percentage = (count[loc] / total_nodes) * 100
             
+            # 确保所有延迟值都是数值
+            avg = avg + 0
+            min_latency[loc] = min_latency[loc] + 0
+            max_latency[loc] = max_latency[loc] + 0
+            
+            # 为每个延迟值单独获取颜色
             avg_color = get_latency_color(avg)
             min_color = get_latency_color(min_latency[loc])
             max_color = get_latency_color(max_latency[loc])
@@ -1934,9 +1945,11 @@ show_provider_stats() {
                 percentage >> "'$report_file'"
         }
         
-        footer = "------------------------------------------------------------------------------------------------\n总计: " total " 个节点"
-        print footer
-        print footer >> "'$report_file'"
+        print "------------------------------------------------------------------------------------------------"
+        printf "总计: %d 个节点\n", total
+        
+        print "------------------------------------------------------------------------------------------------" >> "'$report_file'"
+        printf "总计: %d 个节点\n", total >> "'$report_file'"
     }
     '
     
@@ -1984,6 +1997,8 @@ show_top_providers() {
     }
     
     function get_latency_color(latency) {
+        # 将延迟值转换为数值进行比较
+        latency = latency + 0
         if (latency <= 50) return GREEN
         else if (latency <= 100) return WHITE
         else if (latency <= 200) return YELLOW
@@ -1997,6 +2012,9 @@ show_top_providers() {
         gsub(/ms/, "", latency)
         gsub(/^[ \t]+|[ \t]+$/, "", provider)
         gsub(/^[ \t]+|[ \t]+$/, "", location)
+        
+        # 确保延迟是数值
+        latency = latency + 0
         
         split($6, progress, "/")
         total_nodes = progress[2]
@@ -2057,6 +2075,12 @@ show_top_providers() {
                 avg = sum_latency[key] / count[key]
                 percentage = (count[key] / total_nodes) * 100
                 
+                # 确保所有延迟值都是数值
+                avg = avg + 0
+                min_latency[key] = min_latency[key] + 0
+                max_latency[key] = max_latency[key] + 0
+                
+                # 为每个延迟值单独获取颜色
                 avg_color = get_latency_color(avg)
                 min_color = get_latency_color(min_latency[key])
                 max_color = get_latency_color(max_latency[key])
