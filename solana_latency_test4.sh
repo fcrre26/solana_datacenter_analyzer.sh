@@ -1877,99 +1877,136 @@ show_provider_stats() {
 }
 
 # 显示热门供应商统计
+# 显示热门供应商统计
 show_top_providers() {
-    local log_file="$1"
+    local log_file="/root/solana_reports/detailed_analysis.log"
     local report_file="${REPORT_DIR}/top_providers_stats.txt"
-    local temp_report="${TEMP_DIR}/temp_top_stats.txt"
     
     {
-        echo "============================================"
-        echo "热门供应商节点统计 (TOP 10)"
-        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "============================================"
+        echo
+        echo -e "${GREEN}热门供应商节点统计 (TOP 10) ${WHITE}v${VERSION}${NC}"
+        echo
+        echo -e "${GREEN}============================================${NC}"
+        echo -e "${GREEN}供应商          | 数据中心位置      | 节点数量 | 平均延迟    | 最低延迟    | 最高延迟    | 占比(%)${NC}"
+        echo -e "${GREEN}============================================${NC}"
         
-        # 设置表头
-        local header="供应商          | 数据中心位置      | 节点数量 | 平均延迟    | 最低延迟    | 最高延迟    | 占比(%)"
-        echo "$header"
-        echo "------------------------------------------------------------------------------------------------"
-        
-        # 使用 awk 处理日志文件并计算统计信息
-        awk '
+        grep -v "^$\|^-\|^=\|^时间" "$log_file" | \
+        awk -F' \\| ' '
         BEGIN {
-            FS=" \\| "
-            total_nodes = 0
+            GREEN="\033[0;32m"
+            WHITE="\033[1;37m"
+            YELLOW="\033[1;33m"
+            RED="\033[0;31m"
+            NC="\033[0m"
         }
         
-        # 统计总节点数和供应商信息
+        function get_latency_color(latency) {
+            if (latency <= 50) return GREEN
+            else if (latency <= 100) return WHITE
+            else if (latency <= 200) return YELLOW
+            else return RED
+        }
+        
         {
-            if($3 ~ /^[0-9]+(\.[0-9]+)?$/) {
-                total_nodes++
-                provider = $4
-                location = $5
-                latency = $3
-                
-                providers[provider]++
-                locations[provider,location]++
-                sum_latency[provider,location] += latency
-                
-                if(latency < min_latency[provider,location] || min_latency[provider,location] == 0) 
-                    min_latency[provider,location] = latency
-                if(latency > max_latency[provider,location]) 
-                    max_latency[provider,location] = latency
+            provider = $4
+            location = $5
+            latency = $3
+            gsub(/ms/, "", latency)
+            gsub(/^[ \t]+|[ \t]+$/, "", provider)
+            gsub(/^[ \t]+|[ \t]+$/, "", location)
+            
+            # 从进度获取总节点数
+            split($6, progress, "/")
+            total_nodes = progress[2]
+            
+            # 收集数据
+            if (provider != "" && location != "") {
+                key = provider "|" location
+                count[key]++
+                sum_latency[key] += latency
+                if (!min_latency[key] || latency < min_latency[key]) 
+                    min_latency[key] = latency
+                if (!max_latency[key] || latency > max_latency[key]) 
+                    max_latency[key] = latency
+                providers[provider] += 1
             }
         }
         
         END {
-            # 对供应商进行排序
-            n = asorti(providers, sorted_providers, "@val_num_desc")
+            # 对供应商排序
+            n = 0
+            for (p in providers) {
+                sorted_providers[++n] = p
+            }
             
-            # 只显示前10个供应商
-            for(i = 1; i <= (n > 10 ? 10 : n); i++) {
+            # 按节点数量降序排序
+            for (i = 1; i <= n; i++) {
+                for (j = i + 1; j <= n; j++) {
+                    if (providers[sorted_providers[i]] < providers[sorted_providers[j]]) {
+                        temp = sorted_providers[i]
+                        sorted_providers[i] = sorted_providers[j]
+                        sorted_providers[j] = temp
+                    }
+                }
+            }
+            
+            # 输出前10个供应商
+            for (i = 1; i <= (n < 10 ? n : 10); i++) {
                 provider = sorted_providers[i]
                 
-                # 计算该供应商的总体统计
-                total_avg = 0
-                total_min = 999999
-                total_max = 0
-                
-                for(loc in locations) {
-                    split(loc, arr, SUBSEP)
-                    if(arr[1] == provider) {
-                        avg = sum_latency[loc] / locations[loc]
-                        share = (locations[loc] / total_nodes) * 100
-                        
-                        if(min_latency[loc] < total_min) total_min = min_latency[loc]
-                        if(max_latency[loc] > total_max) total_max = max_latency[loc]
-                        total_avg += sum_latency[loc]
+                # 创建该供应商的位置数组
+                loc_count = 0
+                for (key in count) {
+                    split(key, arr, "|")
+                    if (arr[1] == provider) {
+                        locations[++loc_count] = key
+                        loc_nodes[key] = count[key]
                     }
                 }
                 
-                total_avg = total_avg / providers[provider]
-                total_share = (providers[provider] / total_nodes) * 100
+                # 对位置按节点数量排序
+                for (x = 1; x <= loc_count; x++) {
+                    for (y = x + 1; y <= loc_count; y++) {
+                        if (loc_nodes[locations[x]] < loc_nodes[locations[y]]) {
+                            temp = locations[x]
+                            locations[x] = locations[y]
+                            locations[y] = temp
+                        }
+                    }
+                }
                 
-                printf "%-15s | %-15s | %8d | %10.2f | %10.2f | %10.2f | %6.2f\n",
-                    provider,
-                    "总计",
-                    providers[provider],
-                    total_avg,
-                    total_min,
-                    total_max,
-                    total_share
-                
+                # 输出排序后的位置信息
+                for (x = 1; x <= loc_count; x++) {
+                    key = locations[x]
+                    split(key, arr, "|")
+                    avg = sum_latency[key] / count[key]
+                    percentage = (count[key] / total_nodes) * 100
+                    
+                    # 获取延迟的颜色
+                    avg_color = get_latency_color(avg)
+                    min_color = get_latency_color(min_latency[key])
+                    max_color = get_latency_color(max_latency[key])
+                    
+                    printf "%s%-15s%s | %s%-15s%s | %s%8d%s | %s%10.2f%s | %s%10.2f%s | %s%10.2f%s | %s%6.2f%s\n",
+                        GREEN, substr(arr[1],1,15), NC,
+                        GREEN, substr(arr[2],1,15), NC,
+                        WHITE, count[key], NC,
+                        avg_color, avg, NC,
+                        min_color, min_latency[key], NC,
+                        max_color, max_latency[key], NC,
+                        WHITE, percentage, NC
+                }
                 print "------------------------------------------------------------------------------------------------"
             }
         }
-        ' "$log_file"
+        '
         
-    } | tee "$temp_report"
+    } | tee "$report_file"
     
-    # 保存无颜色版本的报告
-    sed 's/\x1b\[[0-9;]*m//g' "$temp_report" > "$report_file"
-    
-    log "SUCCESS" "报告已保存至: $report_file"
-    rm -f "$temp_report"
+    echo
+    echo -e "${GREEN}[OK]${NC} 报告已保存至: ${WHITE}$report_file${NC}"
+    echo
 }
-
 
 # 显示菜单函数
 show_menu() {
