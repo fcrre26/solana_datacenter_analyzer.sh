@@ -1924,11 +1924,21 @@ analyze_provider() {
 }
 
 # 生成供应商位置数据
+# 生成供应商位置数据
 generate_validator_locations() {
-    local input_file="${REPORT_DIR}/detailed_analysis.log"
+    local input_file="$DETAILED_LOG"  # 使用全局变量
     local output_file="${REPORT_DIR}/validator_locations.txt"
     
-    echo "正在生成供应商位置数据..."
+    # 确保目录存在
+    mkdir -p "$REPORT_DIR"
+    
+    echo -e "${GREEN}正在生成供应商位置数据...${NC}"
+    
+    # 检查输入文件是否存在
+    if [ ! -f "$input_file" ]; then
+        log "ERROR" "找不到分析日志文件: $input_file"
+        return 1
+    fi
     
     # 从详细日志中提取信息并生成位置文件
     awk -F' *\\| *' '
@@ -1956,12 +1966,12 @@ generate_validator_locations() {
     if [ -f "$output_file" ]; then
         local count=$(wc -l < "$output_file")
         log "INFO" "成功生成供应商位置数据，共 $count 条记录"
+        return 0
     else
         log "ERROR" "生成供应商位置数据失败"
+        return 1
     fi
 }
-
-
 # 启动后台分析任务
 start_background_analysis() {
     if [ -f "${TEMP_DIR}/background.pid" ]; then
