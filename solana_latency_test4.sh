@@ -1705,6 +1705,259 @@ test_single_ip() {
     echo -e "${GREEN}===================${NC}"
 }
 
+# 供应商统计菜单
+# 供应商统计菜单
+show_provider_stats_menu() {
+    local log_file="/root/solana_reports/detailed_analysis.log"
+    
+    if [ ! -f "$log_file" ]; then
+        log "ERROR" "未找到分析日志，请先运行选项2进行节点分析"
+        read -rp "按回车键继续..."
+        return 1
+    fi
+
+    while true; do
+        clear
+        echo -e "${GREEN}供应商节点统计${NC}"
+        echo "==================="
+        
+        # 显示当前供应商统计概况
+        echo -e "${CYAN}当前供应商列表:${NC}"
+        echo -e "${WHITE}供应商          | 节点数量${NC}"
+        echo "------------------------"
+        awk -F' \\| ' '
+        {
+            if($3 ~ /^[0-9]+(\.[0-9]+)?$/) {
+                providers[$4]++
+                total++
+            }
+        }
+        END {
+            for(provider in providers) {
+                printf "%-15s | %d\n", substr(provider,1,15), providers[provider]
+            }
+            print "------------------------"
+            printf "总计节点数: %d\n", total
+        }' "$log_file" | sort -rn -k3
+        
+        echo
+        echo -e "1. 查看指定供应商统计"
+        echo -e "2. 查看热门供应商统计 (TOP 10)"
+        echo -e "0. 返回主菜单"
+        echo
+        echo -ne "请选择 [0-2]: "
+        read -r choice
+
+        case $choice in
+            1)  echo -ne "\n请输入供应商名称(参考上方列表): "
+                read -r provider_name
+                if [ -n "$provider_name" ]; then
+                    show_provider_stats "$provider_name" "$log_file"
+                else
+                    log "ERROR" "供应商名称不能为空"
+                fi
+                ;;
+            2)  show_top_providers "$log_file"
+                ;;
+            0)  break
+                ;;
+            *)  log "ERROR" "无效选择"
+                ;;
+        esac
+        
+        [ "$choice" != "0" ] && read -rp "按回车键继续..."
+    done
+}
+
+# 显示指定供应商的统计信息
+show_provider_stats() {
+    local provider="$1"
+    local log_file="$2"
+    local report_file="${REPORT_DIR}/provider_${provider}_stats.txt"
+    local temp_report="${TEMP_DIR}/temp_provider_stats.txt"
+    
+    {
+        echo "============================================"
+        echo "供应商: $provider 的统计信息"
+        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "============================================"
+        
+        # 设置表头
+        local header="供应商          | 数据中心位置      | 节点数量 | 平均延迟    | 最低延迟    | 最高延迟    | 占比(%)"
+        echo "$header"
+        echo "------------------------------------------------------------------------------------------------"
+        
+        # 使用 awk 处理日志文件并计算统计信息
+        awk -v provider="$provider" '
+        BEGIN {
+            FS=" \\| "
+            total_nodes = 0
+            provider_nodes = 0
+        }
+        
+        # 统计总节点数
+        {
+            if($3 ~ /^[0-9]+(\.[0-9]+)?$/) {
+                total_nodes++
+                if($4 ~ provider) {
+                    provider_nodes++
+                    locations[$5]++
+                    latency = $3
+                    sum_latency[$5] += latency
+                    if(latency < min_latency[$5] || min_latency[$5] == 0) min_latency[$5] = latency
+                    if(latency > max_latency[$5]) max_latency[$5] = latency
+                }
+            }
+        }
+        
+        END {
+            if(provider_nodes == 0) {
+                print "未找到该供应商的节点信息"
+                exit
+            }
+            
+            # 对每个数据中心位置进行统计
+            for(loc in locations) {
+                avg = sum_latency[loc] / locations[loc]
+                share = (locations[loc] / total_nodes) * 100
+                printf "%-15s | %-15s | %8d | %10.2f | %10.2f | %10.2f | %6.2f\n",
+                    provider,
+                    substr(loc, 1, 15),
+                    locations[loc],
+                    avg,
+                    min_latency[loc],
+                    max_latency[loc],
+                    share
+            }
+            
+            # 打印总计
+            total_avg = 0
+            total_min = 999999
+            total_max = 0
+            for(loc in locations) {
+                total_avg += sum_latency[loc]
+                if(min_latency[loc] < total_min) total_min = min_latency[loc]
+                if(max_latency[loc] > total_max) total_max = max_latency[loc]
+            }
+            total_avg = total_avg / provider_nodes
+            total_share = (provider_nodes / total_nodes) * 100
+            
+            print "------------------------------------------------------------------------------------------------"
+            printf "%-15s | %-15s | %8d | %10.2f | %10.2f | %10.2f | %6.2f\n",
+                provider,
+                "总计",
+                provider_nodes,
+                total_avg,
+                total_min,
+                total_max,
+                total_share
+        }
+        ' "$log_file"
+        
+    } | tee "$temp_report"
+    
+    # 保存无颜色版本的报告
+    sed 's/\x1b\[[0-9;]*m//g' "$temp_report" > "$report_file"
+    
+    log "SUCCESS" "报告已保存至: $report_file"
+    rm -f "$temp_report"
+}
+
+# 显示热门供应商统计
+show_top_providers() {
+    local log_file="$1"
+    local report_file="${REPORT_DIR}/top_providers_stats.txt"
+    local temp_report="${TEMP_DIR}/temp_top_stats.txt"
+    
+    {
+        echo "============================================"
+        echo "热门供应商节点统计 (TOP 10)"
+        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "============================================"
+        
+        # 设置表头
+        local header="供应商          | 数据中心位置      | 节点数量 | 平均延迟    | 最低延迟    | 最高延迟    | 占比(%)"
+        echo "$header"
+        echo "------------------------------------------------------------------------------------------------"
+        
+        # 使用 awk 处理日志文件并计算统计信息
+        awk '
+        BEGIN {
+            FS=" \\| "
+            total_nodes = 0
+        }
+        
+        # 统计总节点数和供应商信息
+        {
+            if($3 ~ /^[0-9]+(\.[0-9]+)?$/) {
+                total_nodes++
+                provider = $4
+                location = $5
+                latency = $3
+                
+                providers[provider]++
+                locations[provider,location]++
+                sum_latency[provider,location] += latency
+                
+                if(latency < min_latency[provider,location] || min_latency[provider,location] == 0) 
+                    min_latency[provider,location] = latency
+                if(latency > max_latency[provider,location]) 
+                    max_latency[provider,location] = latency
+            }
+        }
+        
+        END {
+            # 对供应商进行排序
+            n = asorti(providers, sorted_providers, "@val_num_desc")
+            
+            # 只显示前10个供应商
+            for(i = 1; i <= (n > 10 ? 10 : n); i++) {
+                provider = sorted_providers[i]
+                
+                # 计算该供应商的总体统计
+                total_avg = 0
+                total_min = 999999
+                total_max = 0
+                
+                for(loc in locations) {
+                    split(loc, arr, SUBSEP)
+                    if(arr[1] == provider) {
+                        avg = sum_latency[loc] / locations[loc]
+                        share = (locations[loc] / total_nodes) * 100
+                        
+                        if(min_latency[loc] < total_min) total_min = min_latency[loc]
+                        if(max_latency[loc] > total_max) total_max = max_latency[loc]
+                        total_avg += sum_latency[loc]
+                    }
+                }
+                
+                total_avg = total_avg / providers[provider]
+                total_share = (providers[provider] / total_nodes) * 100
+                
+                printf "%-15s | %-15s | %8d | %10.2f | %10.2f | %10.2f | %6.2f\n",
+                    provider,
+                    "总计",
+                    providers[provider],
+                    total_avg,
+                    total_min,
+                    total_max,
+                    total_share
+                
+                print "------------------------------------------------------------------------------------------------"
+            }
+        }
+        ' "$log_file"
+        
+    } | tee "$temp_report"
+    
+    # 保存无颜色版本的报告
+    sed 's/\x1b\[[0-9;]*m//g' "$temp_report" > "$report_file"
+    
+    log "SUCCESS" "报告已保存至: $report_file"
+    rm -f "$temp_report"
+}
+
+
 # 显示菜单函数
 show_menu() {
     clear
@@ -1717,10 +1970,11 @@ show_menu() {
     echo -e "${GREEN}4. 查看最新分析报告${NC}"
     echo -e "${GREEN}5. 后台任务管理${NC}"
     echo -e "${GREEN}6. 配置设置${NC}"
-    echo -e "${GREEN}7. API Key 管理${NC}"  # 新增选项
+    echo -e "${GREEN}7. API Key 管理${NC}"
+    echo -e "${GREEN}8. 供应商节点统计${NC}"
     echo -e "${RED}0. 退出程序${NC}"
     echo
-    echo -ne "${GREEN}请输入您的选择 [0-7]: ${NC}"
+    echo -ne "${GREEN}请输入您的选择 [0-8]: ${NC}"
 }
 
 # 启动后台分析任务
@@ -2236,8 +2490,6 @@ main() {
     
     touch "$LOCK_FILE"
 
-
-    
     # 初始化所有必要组件
     check_dependencies || exit 1
     install_solana_cli || exit 1
@@ -2285,6 +2537,8 @@ main() {
                 ;;
             7)  manage_api_keys
                 ;;
+            8)  show_provider_stats_menu
+                ;;
             0)  log "INFO" "感谢使用！"
                 exit 0
                 ;;
@@ -2294,5 +2548,6 @@ main() {
         esac
     done
 }
+
 # 启动程序
 main "$@"
