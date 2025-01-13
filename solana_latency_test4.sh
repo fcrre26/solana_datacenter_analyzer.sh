@@ -1803,6 +1803,7 @@ show_provider_stats_menu() {
 }
 
 # 供应商统计分析函数
+# 供应商统计分析函数
 analyze_provider() {
     local provider="$1"
     local results_file="${REPORT_DIR}/validator_locations.txt"
@@ -1811,7 +1812,7 @@ analyze_provider() {
     if [ ! -f "$results_file" ]; then
         log "ERROR" "未找到分析结果文件，请先运行节点分析"
         return 1
-    }
+    fi
 
     # 创建输出函数，同时输出到屏幕和文件
     output() {
@@ -1829,7 +1830,7 @@ analyze_provider() {
     if [ "$total_nodes" -eq 0 ]; then
         log "ERROR" "未找到 ${provider} 的节点数据"
         return 1
-    }
+    fi
 
     output "${WHITE}供应商总节点数: ${GREEN}${total_nodes}${NC}\n"
 
@@ -1843,16 +1844,18 @@ analyze_provider() {
 
     # 使用 awk 进行统计并排序
     grep "$provider" "$results_file" | \
-    awk -F'|' -v total="$total_nodes" '
-    {
+    awk -F'|' -v total="$total_nodes" '{
         dc = $3
         latency = $4
         count[dc]++
         latency_sum[dc] += latency
-        if (latency < min[dc] || min[dc] == "") min[dc] = latency
-        if (latency > max[dc]) max[dc] = latency
-    }
-    END {
+        if (latency < min[dc] || min[dc] == "") {
+            min[dc] = latency
+        }
+        if (latency > max[dc]) {
+            max[dc] = latency
+        }
+    } END {
         for (dc in count) {
             avg = latency_sum[dc]/count[dc]
             percentage = (count[dc]/total)*100
@@ -1878,15 +1881,17 @@ analyze_provider() {
     # 计算整体统计
     output "\n${WHITE}整体统计:${NC}"
     grep "$provider" "$results_file" | \
-    awk -F'|' '
-    {
+    awk -F'|' '{
         latency = $4
         sum += latency
         count++
-        if (latency < min || min == "") min = latency
-        if (latency > max) max = latency
-    }
-    END {
+        if (latency < min || min == "") {
+            min = latency
+        }
+        if (latency > max) {
+            max = latency
+        }
+    } END {
         avg = sum/count
         printf "整体平均延迟: %.2fms\n最低延迟: %.2fms\n最高延迟: %.2fms\n", avg, min, max
     }' | while IFS= read -r line; do
