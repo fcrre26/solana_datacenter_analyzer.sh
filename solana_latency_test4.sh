@@ -1727,6 +1727,7 @@ show_menu() {
 }
 
 # 供应商统计菜单
+# 供应商统计菜单
 show_provider_stats_menu() {
     while true; do
         clear
@@ -1737,8 +1738,8 @@ show_provider_stats_menu() {
         echo -e "\n${CYAN}当前检测到的供应商:${NC}"
         echo -e "${WHITE}$(printf '=%.0s' {1..50})${NC}"
         
-        # 从结果文件中提取并显示供应商列表 (按节点数从多到少排序)
         if [ -f "${REPORT_DIR}/validator_locations.txt" ]; then
+            # 显示供应商列表和节点数量
             awk -F'|' '
             {
                 providers[$2]++
@@ -1746,34 +1747,34 @@ show_provider_stats_menu() {
             END {
                 printf "\n%-20s | %s\n", "供应商名称", "节点数量"
                 printf "%-20s-+-%s\n", "--------------------", "----------"
-                # 先输出到数组以便排序
+                # 存入数组以便排序
                 for(p in providers) {
                     data[p] = providers[p]
                 }
-                # 使用asorti进行数值排序
+                # 按节点数量降序排序
                 n = asorti(data, sorted, "@val_num_desc")
-                # 按排序后的顺序输出
                 for(i=1; i<=n; i++) {
                     printf "%-20s | %d\n", sorted[i], data[sorted[i]]
                 }
             }' "${REPORT_DIR}/validator_locations.txt"
             
-            echo -e "\n${WHITE}常见供应商代号参考:${NC}"
-            echo -e "${CYAN}AWS${NC} - Amazon Web Services"
-            echo -e "${CYAN}GCP${NC} - Google Cloud Platform"
-            echo -e "${CYAN}Azure${NC} - Microsoft Azure"
-            echo -e "${CYAN}Vultr${NC} - Vultr"
-            echo -e "${CYAN}DO${NC} - DigitalOcean"
-            echo -e "${CYAN}Hetzner${NC} - Hetzner"
-            echo -e "${CYAN}OVH${NC} - OVH"
-            echo -e "${CYAN}Linode${NC} - Linode"
+            # 显示常见供应商参考
+            echo -e "\n常见供应商代号参考:"
+            echo "AWS - Amazon Web Services"
+            echo "GCP - Google Cloud Platform"
+            echo "Azure - Microsoft Azure"
+            echo "Vultr - Vultr"
+            echo "DO - DigitalOcean"
+            echo "Hetzner - Hetzner"
+            echo "OVH - OVH"
+            echo "Linode - Linode"
         else
             echo -e "${YELLOW}请先运行节点分析以获取供应商数据${NC}"
         fi
         
         echo -e "\n${GREEN}操作选项:${NC}"
         echo "1. 查看指定供应商统计"
-        echo "2. 查看热门供应商统计"
+        echo "2. 查看热门供应商统计 (TOP 10)"
         echo "0. 返回主菜单"
         echo
         echo -ne "请选择 [0-2]: "
@@ -1788,8 +1789,25 @@ show_provider_stats_menu() {
                     log "ERROR" "供应商名称不能为空"
                 fi
                 ;;
-            2)  echo -e "\n${GREEN}正在分析热门供应商...${NC}"
-                for provider in "AWS" "GCP" "Azure" "Vultr" "DO" "Hetzner" "OVH" "Linode"; do
+            2)  echo -e "\n${GREEN}正在分析热门供应商 (TOP 10)...${NC}"
+                # 获取前10大供应商
+                local top_providers=$(awk -F'|' '
+                {
+                    providers[$2]++
+                }
+                END {
+                    for (p in providers) {
+                        print providers[p] "|" p
+                    }
+                }' "${REPORT_DIR}/validator_locations.txt" | \
+                sort -t'|' -k1,1nr | head -n 10 | cut -d'|' -f2)
+                
+                echo -e "\n${CYAN}分析以下供应商:${NC}"
+                echo "$top_providers" | nl
+                echo
+                
+                # 分析每个供应商
+                echo "$top_providers" | while read -r provider; do
                     analyze_provider "$provider"
                     echo
                 done
@@ -1802,42 +1820,49 @@ show_provider_stats_menu() {
     done
 }
 
-# 供应商统计分析函数
+
+
+
 # 供应商统计分析函数
 analyze_provider() {
     local provider="$1"
     local results_file="${REPORT_DIR}/validator_locations.txt"
-    local stats_output="${REPORT_DIR}/provider_stats_${provider}_$(date +%Y%m%d_%H%M%S).txt"
-
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local stats_output="${REPORT_DIR}/provider_stats_${provider}_${timestamp}.txt"
+    
+    # 检查数据文件是否存在
     if [ ! -f "$results_file" ]; then
-        log "ERROR" "未找到分析结果文件，请先运行节点分析"
+        log "ERROR" "找不到数据文件: $results_file"
         return 1
     fi
-
-    # 创建输出函数，同时输出到屏幕和文件
-    output() {
-        echo -e "$1"
-        echo -e "$1" >> "$stats_output"
-    }
-
-    # 开始统计
-    output "\n${GREEN}【${provider} 节点分布详细统计】${NC}"
-    output "${GREEN}================================${NC}"
-    output "\n分析时间: $(date '+%Y-%m-%d %H:%M:%S')\n"
-
-    # 统计总节点数
+    
+    # 检查是否有该供应商的数据
     local total_nodes=$(grep -c "$provider" "$results_file")
     if [ "$total_nodes" -eq 0 ]; then
-        log "ERROR" "未找到 ${provider} 的节点数据"
+        log "ERROR" "未找到 $provider 的节点数据"
         return 1
     fi
-
-    output "${WHITE}供应商总节点数: ${GREEN}${total_nodes}${NC}\n"
-
-    # 表头
-    local header=$(printf "${WHITE}%-25s | %10s | %12s | %12s | %12s | %10s${NC}\n" \
+    
+    # 创建输出文件
+    {
+        echo "【${provider} 节点分布详细统计】"
+        echo "================================"
+        echo
+        echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo
+        echo "供应商总节点数: ${total_nodes}"
+        echo
+    } > "$stats_output"
+    
+    # 定义表头和分隔线
+    local header=$(printf "%-30s |  %7s | %11s | %11s | %11s | %9s\n" \
         "数据中心" "节点数" "平均延迟" "最低延迟" "最高延迟" "占比(%)")
-    local separator="${WHITE}$(printf '=%.0s' {1..90})${NC}"
+    local separator="$(printf '=%.0s' {1..90})"
+    
+    # 输出到终端和文件的函数
+    output() {
+        echo "$1" | tee -a "$stats_output"
+    }
     
     output "$header"
     output "$separator"
@@ -1849,12 +1874,8 @@ analyze_provider() {
         latency = $4
         count[dc]++
         latency_sum[dc] += latency
-        if (latency < min[dc] || min[dc] == "") {
-            min[dc] = latency
-        }
-        if (latency > max[dc]) {
-            max[dc] = latency
-        }
+        if (latency < min[dc] || min[dc] == "") min[dc] = latency
+        if (latency > max[dc]) max[dc] = latency
     } END {
         for (dc in count) {
             avg = latency_sum[dc]/count[dc]
@@ -1873,9 +1894,8 @@ analyze_provider() {
             color=$RED
         fi
 
-        local line=$(printf "%-25s | ${WHITE}%10d${NC} | ${color}%11.2fms${NC} | ${GREEN}%11.2fms${NC} | ${RED}%11.2fms${NC} | ${WHITE}%9.2f%%${NC}\n" \
-            "${dc:0:25}" "$count" "$avg" "$min" "$max" "$percentage")
-        output "$line"
+        printf "%-30s |  %7d | ${color}%10.2fms${NC} | ${GREEN}%10.2fms${NC} | ${RED}%10.2fms${NC} | %8.2f%%\n" \
+            "${dc:0:30}" "$count" "$avg" "$min" "$max" "$percentage" | tee -a "$stats_output"
     done
 
     # 计算整体统计
@@ -1885,12 +1905,8 @@ analyze_provider() {
         latency = $4
         sum += latency
         count++
-        if (latency < min || min == "") {
-            min = latency
-        }
-        if (latency > max) {
-            max = latency
-        }
+        if (latency < min || min == "") min = latency
+        if (latency > max) max = latency
     } END {
         avg = sum/count
         printf "整体平均延迟: %.2fms\n最低延迟: %.2fms\n最高延迟: %.2fms\n", avg, min, max
@@ -1907,6 +1923,43 @@ analyze_provider() {
     echo -e "${GREEN}最新报告链接: ${WHITE}${latest_link}${NC}\n"
 }
 
+# 生成供应商位置数据
+generate_validator_locations() {
+    local input_file="${REPORT_DIR}/detailed_analysis.log"
+    local output_file="${REPORT_DIR}/validator_locations.txt"
+    
+    echo "正在生成供应商位置数据..."
+    
+    # 从详细日志中提取信息并生成位置文件
+    awk -F' *\\| *' '
+    # 跳过表头和分隔线
+    /^-+$/ || /^=+$/ || /^时间/ {next}
+    
+    # 匹配数据行
+    /^[0-9]{2}:[0-9]{2}:[0-9]{2} \|/ {
+        ip = $2
+        latency = $3
+        provider = $4
+        location = $5
+        
+        # 清理数据
+        gsub(/ms/, "", latency)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", ip)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", provider)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", location)
+        
+        if (provider != "" && location != "") {
+            print ip "|" provider "|" location "|" latency
+        }
+    }' "$input_file" > "$output_file"
+    
+    if [ -f "$output_file" ]; then
+        local count=$(wc -l < "$output_file")
+        log "INFO" "成功生成供应商位置数据，共 $count 条记录"
+    else
+        log "ERROR" "生成供应商位置数据失败"
+    fi
+}
 
 
 # 启动后台分析任务
@@ -2145,7 +2198,6 @@ show_config_menu() {
     load_config
 }
 
-# 分析验证者节点
 # 分析验证者节点
 analyze_validators() {
     local background="${1:-false}"
