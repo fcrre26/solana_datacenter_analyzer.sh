@@ -1705,8 +1705,6 @@ test_single_ip() {
     echo -e "${GREEN}===================${NC}"
 }
 
-
-
 # 显示菜单函数
 show_menu() {
     clear
@@ -1719,228 +1717,73 @@ show_menu() {
     echo -e "${GREEN}4. 查看最新分析报告${NC}"
     echo -e "${GREEN}5. 后台任务管理${NC}"
     echo -e "${GREEN}6. 配置设置${NC}"
-    echo -e "${GREEN}7. API Key 管理${NC}"
-    echo -e "${GREEN}8. 供应商节点统计${NC}"  # 新增选项
+    echo -e "${GREEN}7. API Key 管理${NC}"  # 新增选项
     echo -e "${RED}0. 退出程序${NC}"
     echo
-    echo -ne "${GREEN}请输入您的选择 [0-8]: ${NC}"
+    echo -ne "${GREEN}请输入您的选择 [0-7]: ${NC}"
 }
 
-# 供应商统计菜单
-# 供应商统计菜单
-show_provider_stats_menu() {
-    while true; do
-        clear
-        echo -e "${GREEN}供应商节点统计${NC}"
-        echo "==================="
-        
-        # 显示当前可用的供应商列表
-        echo -e "\n${CYAN}当前检测到的供应商:${NC}"
-        echo -e "${WHITE}$(printf '=%.0s' {1..50})${NC}"
-        
-        if [ -f "${REPORT_DIR}/validator_locations.txt" ]; then
-            # 显示供应商列表和节点数量
-            awk -F'|' '
-            {
-                providers[$2]++
-            } 
-            END {
-                printf "\n%-20s | %s\n", "供应商名称", "节点数量"
-                printf "%-20s-+-%s\n", "--------------------", "----------"
-                # 存入数组以便排序
-                for(p in providers) {
-                    data[p] = providers[p]
-                }
-                # 按节点数量降序排序
-                n = asorti(data, sorted, "@val_num_desc")
-                for(i=1; i<=n; i++) {
-                    printf "%-20s | %d\n", sorted[i], data[sorted[i]]
-                }
-            }' "${REPORT_DIR}/validator_locations.txt"
-            
-            # 显示常见供应商参考
-            echo -e "\n常见供应商代号参考:"
-            echo "AWS - Amazon Web Services"
-            echo "GCP - Google Cloud Platform"
-            echo "Azure - Microsoft Azure"
-            echo "Vultr - Vultr"
-            echo "DO - DigitalOcean"
-            echo "Hetzner - Hetzner"
-            echo "OVH - OVH"
-            echo "Linode - Linode"
+# 启动后台分析任务
+start_background_analysis() {
+    if [ -f "${TEMP_DIR}/background.pid" ]; then
+        if kill -0 "$(cat "${TEMP_DIR}/background.pid")" 2>/dev/null; then
+            log "ERROR" "已有后台任务在运行"
+            return 1
         else
-            echo -e "${YELLOW}请先运行节点分析以获取供应商数据${NC}"
+            rm -f "${TEMP_DIR}/background.pid"
         fi
-        
-        echo -e "\n${GREEN}操作选项:${NC}"
-        echo "1. 查看指定供应商统计"
-        echo "2. 查看热门供应商统计 (TOP 10)"
-        echo "0. 返回主菜单"
-        echo
-        echo -ne "请选择 [0-2]: "
-        read -r choice
+    fi
 
-        case $choice in
-            1)  echo -ne "\n${GREEN}请输入要查看的供应商名称: ${NC}"
-                read -r provider_name
-                if [ -n "$provider_name" ]; then
-                    analyze_provider "$provider_name"
-                else
-                    log "ERROR" "供应商名称不能为空"
-                fi
-                ;;
-            2)  echo -e "\n${GREEN}正在分析热门供应商 (TOP 10)...${NC}"
-                # 获取前10大供应商
-                local top_providers=$(awk -F'|' '
-                {
-                    providers[$2]++
-                }
-                END {
-                    for (p in providers) {
-                        print providers[p] "|" p
-                    }
-                }' "${REPORT_DIR}/validator_locations.txt" | \
-                sort -t'|' -k1,1nr | head -n 10 | cut -d'|' -f2)
-                
-                echo -e "\n${CYAN}分析以下供应商:${NC}"
-                echo "$top_providers" | nl
-                echo
-                
-                # 分析每个供应商
-                echo "$top_providers" | while read -r provider; do
-                    analyze_provider "$provider"
-                    echo
-                done
-                ;;
-            0)  return ;;
-            *)  log "ERROR" "无效选择" ;;
-        esac
-        
-        read -rp "按回车键继续..."
-    done
+    log "INFO" "启动后台分析任务..."
+    
+    # 获取脚本的完整路径
+    SCRIPT_PATH=$(readlink -f "$0")
+    
+    # 确保目录存在
+    mkdir -p "${TEMP_DIR}"
+    mkdir -p "$(dirname "${BACKGROUND_LOG}")"
+    
+    # 记录开始时间
+    date +%s > "${TEMP_DIR}/start_time"
+    
+    # 使用 nohup 启动后台进程
+    nohup bash "${SCRIPT_PATH}" background > "${BACKGROUND_LOG}" 2>&1 &
+    local pid=$!
+    
+    # 等待确保进程启动
+    sleep 2
+    
+    if kill -0 $pid 2>/dev/null; then
+        echo $pid > "${TEMP_DIR}/background.pid"
+        chmod 644 "${TEMP_DIR}/background.pid"
+        log "SUCCESS" "后台任务已启动，进程ID: $pid"
+        log "INFO" "可以使用选项 2 监控任务进度"
+        return 0
+    else
+        log "ERROR" "后台任务启动失败"
+        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
+        return 1
+    fi
 }
 
-# 供应商统计分析函数
-# 供应商统计分析函数
-analyze_provider() {
-    local provider="$1"
-    local is_top10="${2:-false}"
-    local results_file="${REPORT_DIR}/validator_locations.txt"
-    local timestamp=$(date +%Y%m%d_%H%M%S)
-    local stats_output
-    
-    # 根据模式决定输出文件
-    if [ "$is_top10" = "true" ]; then
-        stats_output="${REPORT_DIR}/top10_providers_stats_${timestamp}.txt"
-    else
-        stats_output="${REPORT_DIR}/provider_stats_${provider}_${timestamp}.txt"
-    fi
-    
-    # 检查数据文件是否存在
-    if [ ! -f "$results_file" ]; then
-        log "ERROR" "找不到数据文件: $results_file"
+# 监控后台任务进度
+monitor_background_progress() {
+    if [ ! -f "${BACKGROUND_LOG}" ]; then
+        log "WARN" "没有运行中的后台任务"
         return 1
     fi
     
-    # 检查是否有该供应商的数据
-    local total_nodes=$(grep -c "$provider" "$results_file")
-    if [ "$total_nodes" -eq 0 ]; then
-        log "ERROR" "未找到 $provider 的节点数据"
-        return 1
-    fi
+    clear
+    echo -e "\n${GREEN}正在监控后台任务 (按 Ctrl+C 退出监控)${NC}"
+    echo -e "${GREEN}===================${NC}\n"
     
-    # 如果不是 TOP 10 或者是第一个供应商，创建新文件
-    if [ "$is_top10" != "true" ] || [ ! -f "$stats_output" ]; then
-        {
-            echo "【供应商节点分布统计】"
-            echo "================================"
-            echo
-            echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')"
-            echo
-        } > "$stats_output"
-    else
-        # TOP 10 模式下追加分隔符
-        echo -e "\n\n【${provider}】\n" >> "$stats_output"
-    fi
+    # 使用 trap 捕获 Ctrl+C
+    trap 'echo -e "\n${GREEN}退出监控${NC}"; return 0' INT
     
-    # 定义固定的列宽
-    local prov_width=20    # 供应商列宽
-    local dc_width=35      # 数据中心列宽
-    local num_width=7      # 节点数列宽
-    local lat_width=11     # 延迟列宽
-    local pct_width=9      # 百分比列宽
+    tail -f "${BACKGROUND_LOG}"
     
-    # 定义表头和分隔线
-    local header=$(printf "%-${prov_width}s | %-${dc_width}s |  %${num_width}s | %${lat_width}s | %${lat_width}s | %${lat_width}s | %${pct_width}s\n" \
-        "供应商" "数据中心" "节点数" "平均延迟" "最低延迟" "最高延迟" "占比(%)")
-    local separator="$(printf '=%.0s' {1..120})"
-    
-    # 输出到终端和文件的函数
-    output() {
-        if [ "$is_top10" = "true" ]; then
-            echo "$1" >> "$stats_output"
-        else
-            echo "$1" | tee -a "$stats_output"
-        fi
-    }
-    
-    output "$header"
-    output "$separator"
-
-    # 使用 awk 进行统计并排序
-    grep "$provider" "$results_file" | \
-    awk -F'|' -v total="$total_nodes" -v provider="$provider" '{
-        dc = $3
-        latency = $4
-        count[dc]++
-        latency_sum[dc] += latency
-        if (latency < min[dc] || min[dc] == "") min[dc] = latency
-        if (latency > max[dc]) max[dc] = latency
-    } END {
-        for (dc in count) {
-            avg = latency_sum[dc]/count[dc]
-            percentage = (count[dc]/total)*100
-            printf "%s|%s|%d|%.2f|%.2f|%.2f|%.2f\n", 
-                provider, dc, count[dc], avg, min[dc], max[dc], percentage
-        }
-    }' | sort -t'|' -k3,3nr | \
-    while IFS='|' read -r prov dc count avg min max percentage; do
-        # 根据延迟设置颜色
-        if [ "$(echo "$avg < 100" | bc -l)" -eq 1 ]; then
-            color=$GREEN
-        elif [ "$(echo "$avg < 200" | bc -l)" -eq 1 ]; then
-            color=$YELLOW
-        else
-            color=$RED
-        fi
-
-        printf "%-${prov_width}s | %-${dc_width}s |  %${num_width}d | ${color}%${lat_width}.2fms${NC} | ${GREEN}%${lat_width}.2fms${NC} | ${RED}%${lat_width}.2fms${NC} | %${pct_width}.2f%%\n" \
-            "${prov:0:$prov_width}" "${dc:0:$dc_width}" "$count" "$avg" "$min" "$max" "$percentage" | tee -a "$stats_output"
-    done
-
-    # 计算整体统计
-    output "\n整体统计:"
-    grep "$provider" "$results_file" | \
-    awk -F'|' '{
-        latency = $4
-        sum += latency
-        count++
-        if (latency < min || min == "") min = latency
-        if (latency > max) max = latency
-    } END {
-        avg = sum/count
-        printf "整体平均延迟: %.2fms\n最低延迟: %.2fms\n最高延迟: %.2fms\n", avg, min, max
-    }' | while IFS= read -r line; do
-        output "$line"
-    done
-
-    # 只在非 TOP 10 模式下显示文件保存信息
-    if [ "$is_top10" != "true" ]; then
-        echo -e "\n${GREEN}统计报告已保存到: ${WHITE}${stats_output}${NC}"
-        local latest_link="${REPORT_DIR}/latest_${provider}_stats.txt"
-        ln -sf "$stats_output" "$latest_link"
-        echo -e "${GREEN}最新报告链接: ${WHITE}${latest_link}${NC}\n"
-    fi
+    # 重置 trap
+    trap - INT
 }
 
 # 停止后台任务
@@ -2116,6 +1959,7 @@ show_config_menu() {
     load_config
 }
 
+# 分析验证者节点
 # 分析验证者节点
 analyze_validators() {
     local background="${1:-false}"
@@ -2363,8 +2207,6 @@ analyze_validators() {
         
 
 # 主函数
-
-# 主函数
 main() {
     local cmd="${1:-}"
     
@@ -2374,6 +2216,9 @@ main() {
     fi
     
     # 确保目录结构正确
+    setup_directories
+   
+    # 设置目录
     setup_directories
     
     if [ "$cmd" = "background" ]; then
@@ -2390,6 +2235,8 @@ main() {
     fi
     
     touch "$LOCK_FILE"
+
+
     
     # 初始化所有必要组件
     check_dependencies || exit 1
@@ -2438,10 +2285,7 @@ main() {
                 ;;
             7)  manage_api_keys
                 ;;
-            8)  show_provider_stats_menu  # 新增供应商统计功能
-                ;;
             0)  log "INFO" "感谢使用！"
-                cleanup
                 exit 0
                 ;;
             *)  log "ERROR" "无效选择"
@@ -2450,6 +2294,5 @@ main() {
         esac
     done
 }
-
 # 启动程序
 main "$@"
