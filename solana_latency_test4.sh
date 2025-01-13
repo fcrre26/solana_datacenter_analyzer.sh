@@ -1820,9 +1820,6 @@ show_provider_stats_menu() {
     done
 }
 
-
-
-
 # 供应商统计分析函数
 analyze_provider() {
     local provider="$1"
@@ -1923,16 +1920,12 @@ analyze_provider() {
     echo -e "${GREEN}最新报告链接: ${WHITE}${latest_link}${NC}\n"
 }
 
-# 生成供应商位置数据
-# 生成供应商位置数据
+# 直接生成供应商数据
 generate_validator_locations() {
     local input_file="$DETAILED_LOG"  # 使用全局变量
     local output_file="${REPORT_DIR}/validator_locations.txt"
     
-    # 确保目录存在
-    mkdir -p "$REPORT_DIR"
-    
-    echo -e "${GREEN}正在生成供应商位置数据...${NC}"
+    echo -e "${GREEN}正在从现有分析日志生成供应商数据...${NC}"
     
     # 检查输入文件是否存在
     if [ ! -f "$input_file" ]; then
@@ -1972,6 +1965,12 @@ generate_validator_locations() {
         return 1
     fi
 }
+
+# 直接执行
+generate_validator_locations
+
+
+
 # 启动后台分析任务
 start_background_analysis() {
     if [ -f "${TEMP_DIR}/background.pid" ]; then
