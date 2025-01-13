@@ -1724,24 +1724,61 @@ show_provider_stats_menu() {
             echo -e "${CYAN}当前供应商列表:${NC}"
             echo -e "${WHITE}供应商          | 节点数量${NC}"
             echo "------------------------"
-            awk -F' \\| ' '
+            
+            awk '
+            BEGIN {
+                FS=" \\| "
+            }
+            
+            # 获取总节点数
+            /^[0-9]+\/[0-9]+$/ {
+                split($NF, arr, "/")
+                total_nodes = arr[2]
+                next
+            }
+            
+            # 跳过表头、分隔线和空行
+            /^时间/ || /^=+/ || /^-+/ || /^$/ {
+                next
+            }
+            
+            # 处理数据行
             {
-                if($3 ~ /^[0-9]+(\.[0-9]+)?$/) {
-                    providers[$4]++
-                    total++
+                provider = $4
+                gsub(/^[ \t]+|[ \t]+$/, "", provider)
+                if (provider != "") {
+                    providers[provider]++
                 }
             }
+            
             END {
-                if(total == 0) {
-                    print "暂无数据，请先运行节点分析"
-                } else {
-                    for(provider in providers) {
-                        printf "%-15s | %d\n", substr(provider,1,15), providers[provider]
-                    }
-                    print "------------------------"
-                    printf "总计节点数: %d\n", total
+                # 创建排序数组
+                n = 0
+                for (p in providers) {
+                    sorted[++n] = p
                 }
-            }' "$log_file" | sort -rn -k3
+                
+                # 按节点数量降序排序
+                for (i = 1; i <= n; i++) {
+                    for (j = i + 1; j <= n; j++) {
+                        if (providers[sorted[i]] < providers[sorted[j]]) {
+                            temp = sorted[i]
+                            sorted[i] = sorted[j]
+                            sorted[j] = temp
+                        }
+                    }
+                }
+                
+                # 输出所有供应商
+                for (i = 1; i <= n; i++) {
+                    printf "%-15s | %d\n", substr(sorted[i],1,15), providers[sorted[i]]
+                }
+                
+                print "------------------------"
+                printf "总计节点数: %d\n", total_nodes
+            }
+            ' "$log_file"
+            
             echo "------------------------"
         fi
         
