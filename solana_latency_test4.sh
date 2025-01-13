@@ -1821,6 +1821,7 @@ show_provider_stats_menu() {
 }
 
 # 供应商统计分析函数
+# 供应商统计分析函数
 analyze_provider() {
     local provider="$1"
     local results_file="${REPORT_DIR}/validator_locations.txt"
@@ -1968,8 +1969,6 @@ generate_validator_locations() {
 
 # 直接执行
 generate_validator_locations
-
-
 
 # 启动后台分析任务
 start_background_analysis() {
