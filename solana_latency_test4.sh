@@ -1705,6 +1705,8 @@ test_single_ip() {
     echo -e "${GREEN}===================${NC}"
 }
 
+
+
 # 显示菜单函数
 show_menu() {
     clear
@@ -1717,11 +1719,190 @@ show_menu() {
     echo -e "${GREEN}4. 查看最新分析报告${NC}"
     echo -e "${GREEN}5. 后台任务管理${NC}"
     echo -e "${GREEN}6. 配置设置${NC}"
-    echo -e "${GREEN}7. API Key 管理${NC}"  # 新增选项
+    echo -e "${GREEN}7. API Key 管理${NC}"
+    echo -e "${GREEN}8. 供应商节点统计${NC}"  # 新增选项
     echo -e "${RED}0. 退出程序${NC}"
     echo
-    echo -ne "${GREEN}请输入您的选择 [0-7]: ${NC}"
+    echo -ne "${GREEN}请输入您的选择 [0-8]: ${NC}"
 }
+
+# 供应商统计菜单
+show_provider_stats_menu() {
+    while true; do
+        clear
+        echo -e "${GREEN}供应商节点统计${NC}"
+        echo "==================="
+        
+        # 显示当前可用的供应商列表
+        echo -e "\n${CYAN}当前检测到的供应商:${NC}"
+        echo -e "${WHITE}$(printf '=%.0s' {1..50})${NC}"
+        
+        # 从结果文件中提取并显示供应商列表 (按节点数从多到少排序)
+        if [ -f "${REPORT_DIR}/validator_locations.txt" ]; then
+            awk -F'|' '
+            {
+                providers[$2]++
+            } 
+            END {
+                printf "\n%-20s | %s\n", "供应商名称", "节点数量"
+                printf "%-20s-+-%s\n", "--------------------", "----------"
+                # 先输出到数组以便排序
+                for(p in providers) {
+                    data[p] = providers[p]
+                }
+                # 使用asorti进行数值排序
+                n = asorti(data, sorted, "@val_num_desc")
+                # 按排序后的顺序输出
+                for(i=1; i<=n; i++) {
+                    printf "%-20s | %d\n", sorted[i], data[sorted[i]]
+                }
+            }' "${REPORT_DIR}/validator_locations.txt"
+            
+            echo -e "\n${WHITE}常见供应商代号参考:${NC}"
+            echo -e "${CYAN}AWS${NC} - Amazon Web Services"
+            echo -e "${CYAN}GCP${NC} - Google Cloud Platform"
+            echo -e "${CYAN}Azure${NC} - Microsoft Azure"
+            echo -e "${CYAN}Vultr${NC} - Vultr"
+            echo -e "${CYAN}DO${NC} - DigitalOcean"
+            echo -e "${CYAN}Hetzner${NC} - Hetzner"
+            echo -e "${CYAN}OVH${NC} - OVH"
+            echo -e "${CYAN}Linode${NC} - Linode"
+        else
+            echo -e "${YELLOW}请先运行节点分析以获取供应商数据${NC}"
+        fi
+        
+        echo -e "\n${GREEN}操作选项:${NC}"
+        echo "1. 查看指定供应商统计"
+        echo "2. 查看热门供应商统计"
+        echo "0. 返回主菜单"
+        echo
+        echo -ne "请选择 [0-2]: "
+        read -r choice
+
+        case $choice in
+            1)  echo -ne "\n${GREEN}请输入要查看的供应商名称: ${NC}"
+                read -r provider_name
+                if [ -n "$provider_name" ]; then
+                    analyze_provider "$provider_name"
+                else
+                    log "ERROR" "供应商名称不能为空"
+                fi
+                ;;
+            2)  echo -e "\n${GREEN}正在分析热门供应商...${NC}"
+                for provider in "AWS" "GCP" "Azure" "Vultr" "DO" "Hetzner" "OVH" "Linode"; do
+                    analyze_provider "$provider"
+                    echo
+                done
+                ;;
+            0)  return ;;
+            *)  log "ERROR" "无效选择" ;;
+        esac
+        
+        read -rp "按回车键继续..."
+    done
+}
+
+# 供应商统计分析函数
+analyze_provider() {
+    local provider="$1"
+    local results_file="${REPORT_DIR}/validator_locations.txt"
+    local stats_output="${REPORT_DIR}/provider_stats_${provider}_$(date +%Y%m%d_%H%M%S).txt"
+
+    if [ ! -f "$results_file" ]; then
+        log "ERROR" "未找到分析结果文件，请先运行节点分析"
+        return 1
+    }
+
+    # 创建输出函数，同时输出到屏幕和文件
+    output() {
+        echo -e "$1"
+        echo -e "$1" >> "$stats_output"
+    }
+
+    # 开始统计
+    output "\n${GREEN}【${provider} 节点分布详细统计】${NC}"
+    output "${GREEN}================================${NC}"
+    output "\n分析时间: $(date '+%Y-%m-%d %H:%M:%S')\n"
+
+    # 统计总节点数
+    local total_nodes=$(grep -c "$provider" "$results_file")
+    if [ "$total_nodes" -eq 0 ]; then
+        log "ERROR" "未找到 ${provider} 的节点数据"
+        return 1
+    }
+
+    output "${WHITE}供应商总节点数: ${GREEN}${total_nodes}${NC}\n"
+
+    # 表头
+    local header=$(printf "${WHITE}%-25s | %10s | %12s | %12s | %12s | %10s${NC}\n" \
+        "数据中心" "节点数" "平均延迟" "最低延迟" "最高延迟" "占比(%)")
+    local separator="${WHITE}$(printf '=%.0s' {1..90})${NC}"
+    
+    output "$header"
+    output "$separator"
+
+    # 使用 awk 进行统计并排序
+    grep "$provider" "$results_file" | \
+    awk -F'|' -v total="$total_nodes" '
+    {
+        dc = $3
+        latency = $4
+        count[dc]++
+        latency_sum[dc] += latency
+        if (latency < min[dc] || min[dc] == "") min[dc] = latency
+        if (latency > max[dc]) max[dc] = latency
+    }
+    END {
+        for (dc in count) {
+            avg = latency_sum[dc]/count[dc]
+            percentage = (count[dc]/total)*100
+            printf "%s|%d|%.2f|%.2f|%.2f|%.2f\n", 
+                dc, count[dc], avg, min[dc], max[dc], percentage
+        }
+    }' | sort -t'|' -k2,2nr | \
+    while IFS='|' read -r dc count avg min max percentage; do
+        # 根据延迟设置颜色
+        if [ "$(echo "$avg < 100" | bc -l)" -eq 1 ]; then
+            color=$GREEN
+        elif [ "$(echo "$avg < 200" | bc -l)" -eq 1 ]; then
+            color=$YELLOW
+        else
+            color=$RED
+        fi
+
+        local line=$(printf "%-25s | ${WHITE}%10d${NC} | ${color}%11.2fms${NC} | ${GREEN}%11.2fms${NC} | ${RED}%11.2fms${NC} | ${WHITE}%9.2f%%${NC}\n" \
+            "${dc:0:25}" "$count" "$avg" "$min" "$max" "$percentage")
+        output "$line"
+    done
+
+    # 计算整体统计
+    output "\n${WHITE}整体统计:${NC}"
+    grep "$provider" "$results_file" | \
+    awk -F'|' '
+    {
+        latency = $4
+        sum += latency
+        count++
+        if (latency < min || min == "") min = latency
+        if (latency > max) max = latency
+    }
+    END {
+        avg = sum/count
+        printf "整体平均延迟: %.2fms\n最低延迟: %.2fms\n最高延迟: %.2fms\n", avg, min, max
+    }' | while IFS= read -r line; do
+        output "$line"
+    done
+
+    # 添加文件位置提示
+    echo -e "\n${GREEN}统计报告已保存到: ${WHITE}${stats_output}${NC}"
+    
+    # 为了方便访问最新报告，创建软链接
+    local latest_link="${REPORT_DIR}/latest_${provider}_stats.txt"
+    ln -sf "$stats_output" "$latest_link"
+    echo -e "${GREEN}最新报告链接: ${WHITE}${latest_link}${NC}\n"
+}
+
+
 
 # 启动后台分析任务
 start_background_analysis() {
@@ -2207,6 +2388,8 @@ analyze_validators() {
         
 
 # 主函数
+
+# 主函数
 main() {
     local cmd="${1:-}"
     
@@ -2216,9 +2399,6 @@ main() {
     fi
     
     # 确保目录结构正确
-    setup_directories
-   
-    # 设置目录
     setup_directories
     
     if [ "$cmd" = "background" ]; then
@@ -2235,8 +2415,6 @@ main() {
     fi
     
     touch "$LOCK_FILE"
-
-
     
     # 初始化所有必要组件
     check_dependencies || exit 1
@@ -2285,7 +2463,10 @@ main() {
                 ;;
             7)  manage_api_keys
                 ;;
+            8)  show_provider_stats_menu  # 新增供应商统计功能
+                ;;
             0)  log "INFO" "感谢使用！"
+                cleanup
                 exit 0
                 ;;
             *)  log "ERROR" "无效选择"
@@ -2294,5 +2475,6 @@ main() {
         esac
     done
 }
+
 # 启动程序
 main "$@"
