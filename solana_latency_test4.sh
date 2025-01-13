@@ -1826,7 +1826,8 @@ analyze_provider() {
     local provider="$1"
     local results_file="${REPORT_DIR}/validator_locations.txt"
     local timestamp=$(date +%Y%m%d_%H%M%S)
-    local stats_output="${REPORT_DIR}/provider_stats_${provider}_${timestamp}.txt"
+    local stats_output="${REPORT_DIR}/top10_providers_stats.txt"
+    local is_top10="${2:-false}"
     
     # 检查数据文件是否存在
     if [ ! -f "$results_file" ]; then
@@ -1841,29 +1842,42 @@ analyze_provider() {
         return 1
     fi
     
-    # 创建输出文件
-    {
-        echo "【${provider} 节点分布详细统计】"
-        echo "================================"
-        echo
-        echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo
-        echo "供应商总节点数: ${total_nodes}"
-        echo
-    } > "$stats_output"
+    # 如果不是 TOP 10 分析，则创建单独的输出文件
+    if [ "$is_top10" != "true" ]; then
+        stats_output="${REPORT_DIR}/provider_stats_${provider}_${timestamp}.txt"
+        {
+            echo "【${provider} 节点分布详细统计】"
+            echo "================================"
+            echo
+            echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo
+            echo "供应商总节点数: ${total_nodes}"
+            echo
+        } > "$stats_output"
+    fi
+    
+    # 定义固定的列宽
+    local prov_width=20    # 供应商列宽
+    local dc_width=35      # 数据中心列宽
+    local num_width=7      # 节点数列宽
+    local lat_width=11     # 延迟列宽
+    local pct_width=9      # 百分比列宽
     
     # 定义表头和分隔线
-    local header=$(printf "%-30s |  %7s | %11s | %11s | %11s | %9s\n" \
-        "数据中心" "节点数" "平均延迟" "最低延迟" "最高延迟" "占比(%)")
-    local separator="$(printf '=%.0s' {1..90})"
+    local header=$(printf "%-${prov_width}s | %-${dc_width}s |  %${num_width}s | %${lat_width}s | %${lat_width}s | %${lat_width}s | %${pct_width}s\n" \
+        "供应商" "数据中心" "节点数" "平均延迟" "最低延迟" "最高延迟" "占比(%)")
+    local separator="$(printf '=%.0s' {1..120})"
     
     # 输出到终端和文件的函数
     output() {
         echo "$1" | tee -a "$stats_output"
     }
     
-    output "$header"
-    output "$separator"
+    # 如果是第一个供应商或非TOP10，输出表头
+    if [ "$is_top10" != "true" ] || [ ! -s "$stats_output" ]; then
+        output "$header"
+        output "$separator"
+    fi
 
     # 使用 awk 进行统计并排序
     grep "$provider" "$results_file" | \
@@ -1892,8 +1906,8 @@ analyze_provider() {
             color=$RED
         fi
 
-        printf "%-30s |  %7d | ${color}%10.2fms${NC} | ${GREEN}%10.2fms${NC} | ${RED}%10.2fms${NC} | %8.2f%%\n" \
-            "${dc:0:30}" "$count" "$avg" "$min" "$max" "$percentage" | tee -a "$stats_output"
+        printf "%-${prov_width}s | %-${dc_width}s |  %${num_width}d | ${color}%${lat_width}.2fms${NC} | ${GREEN}%${lat_width}.2fms${NC} | ${RED}%${lat_width}.2fms${NC} | %${pct_width}.2f%%\n" \
+            "${provider:0:$prov_width}" "${dc:0:$dc_width}" "$count" "$avg" "$min" "$max" "$percentage" | tee -a "$stats_output"
     done
 
     # 计算整体统计
@@ -1912,104 +1926,12 @@ analyze_provider() {
         output "$line"
     done
 
-    # 添加文件位置提示
-    echo -e "\n${GREEN}统计报告已保存到: ${WHITE}${stats_output}${NC}"
-    
-    # 为了方便访问最新报告，创建软链接
-    local latest_link="${REPORT_DIR}/latest_${provider}_stats.txt"
-    ln -sf "$stats_output" "$latest_link"
-    echo -e "${GREEN}最新报告链接: ${WHITE}${latest_link}${NC}\n"
-}
-
-# 直接生成供应商数据
-generate_validator_locations() {
-    local input_file="$DETAILED_LOG"  # 使用全局变量
-    local output_file="${REPORT_DIR}/validator_locations.txt"
-    
-    echo -e "${GREEN}正在从现有分析日志生成供应商数据...${NC}"
-    
-    # 检查输入文件是否存在
-    if [ ! -f "$input_file" ]; then
-        log "ERROR" "找不到分析日志文件: $input_file"
-        return 1
-    fi
-    
-    # 从详细日志中提取信息并生成位置文件
-    awk -F' *\\| *' '
-    # 跳过表头和分隔线
-    /^-+$/ || /^=+$/ || /^时间/ {next}
-    
-    # 匹配数据行
-    /^[0-9]{2}:[0-9]{2}:[0-9]{2} \|/ {
-        ip = $2
-        latency = $3
-        provider = $4
-        location = $5
-        
-        # 清理数据
-        gsub(/ms/, "", latency)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", ip)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", provider)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", location)
-        
-        if (provider != "" && location != "") {
-            print ip "|" provider "|" location "|" latency
-        }
-    }' "$input_file" > "$output_file"
-    
-    if [ -f "$output_file" ]; then
-        local count=$(wc -l < "$output_file")
-        log "INFO" "成功生成供应商位置数据，共 $count 条记录"
-        return 0
-    else
-        log "ERROR" "生成供应商位置数据失败"
-        return 1
-    fi
-}
-
-# 直接执行
-generate_validator_locations
-
-# 启动后台分析任务
-start_background_analysis() {
-    if [ -f "${TEMP_DIR}/background.pid" ]; then
-        if kill -0 "$(cat "${TEMP_DIR}/background.pid")" 2>/dev/null; then
-            log "ERROR" "已有后台任务在运行"
-            return 1
-        else
-            rm -f "${TEMP_DIR}/background.pid"
-        fi
-    fi
-
-    log "INFO" "启动后台分析任务..."
-    
-    # 获取脚本的完整路径
-    SCRIPT_PATH=$(readlink -f "$0")
-    
-    # 确保目录存在
-    mkdir -p "${TEMP_DIR}"
-    mkdir -p "$(dirname "${BACKGROUND_LOG}")"
-    
-    # 记录开始时间
-    date +%s > "${TEMP_DIR}/start_time"
-    
-    # 使用 nohup 启动后台进程
-    nohup bash "${SCRIPT_PATH}" background > "${BACKGROUND_LOG}" 2>&1 &
-    local pid=$!
-    
-    # 等待确保进程启动
-    sleep 2
-    
-    if kill -0 $pid 2>/dev/null; then
-        echo $pid > "${TEMP_DIR}/background.pid"
-        chmod 644 "${TEMP_DIR}/background.pid"
-        log "SUCCESS" "后台任务已启动，进程ID: $pid"
-        log "INFO" "可以使用选项 2 监控任务进度"
-        return 0
-    else
-        log "ERROR" "后台任务启动失败"
-        rm -f "${TEMP_DIR}/background.pid" "${BACKGROUND_LOG}"
-        return 1
+    # 如果不是 TOP 10 分析，添加文件位置提示
+    if [ "$is_top10" != "true" ]; then
+        echo -e "\n${GREEN}统计报告已保存到: ${WHITE}${stats_output}${NC}"
+        local latest_link="${REPORT_DIR}/latest_${provider}_stats.txt"
+        ln -sf "$stats_output" "$latest_link"
+        echo -e "${GREEN}最新报告链接: ${WHITE}${latest_link}${NC}\n"
     fi
 }
 
