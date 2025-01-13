@@ -1710,35 +1710,40 @@ test_single_ip() {
 show_provider_stats_menu() {
     local log_file="/root/solana_reports/detailed_analysis.log"
     
-    if [ ! -f "$log_file" ]; then
-        log "ERROR" "未找到分析日志，请先运行选项2进行节点分析"
-        read -rp "按回车键继续..."
-        return 1
-    fi
-
     while true; do
         clear
         echo -e "${GREEN}供应商节点统计${NC}"
         echo "==================="
         
-        # 显示当前供应商统计概况
-        echo -e "${CYAN}当前供应商列表:${NC}"
-        echo -e "${WHITE}供应商          | 节点数量${NC}"
-        echo "------------------------"
-        awk -F' \\| ' '
-        {
-            if($3 ~ /^[0-9]+(\.[0-9]+)?$/) {
-                providers[$4]++
-                total++
+        if [ ! -f "$log_file" ] || [ ! -s "$log_file" ]; then
+            echo -e "${YELLOW}提示: 未找到节点分析数据${NC}"
+            echo -e "${YELLOW}请先运行选项2(并发分析所有节点)后再查看统计信息${NC}"
+            echo "==================="
+        else
+            # 显示当前供应商统计概况
+            echo -e "${CYAN}当前供应商列表:${NC}"
+            echo -e "${WHITE}供应商          | 节点数量${NC}"
+            echo "------------------------"
+            awk -F' \\| ' '
+            {
+                if($3 ~ /^[0-9]+(\.[0-9]+)?$/) {
+                    providers[$4]++
+                    total++
+                }
             }
-        }
-        END {
-            for(provider in providers) {
-                printf "%-15s | %d\n", substr(provider,1,15), providers[provider]
-            }
-            print "------------------------"
-            printf "总计节点数: %d\n", total
-        }' "$log_file" | sort -rn -k3
+            END {
+                if(total == 0) {
+                    print "暂无数据，请先运行节点分析"
+                } else {
+                    for(provider in providers) {
+                        printf "%-15s | %d\n", substr(provider,1,15), providers[provider]
+                    }
+                    print "------------------------"
+                    printf "总计节点数: %d\n", total
+                }
+            }' "$log_file" | sort -rn -k3
+            echo "------------------------"
+        fi
         
         echo
         echo -e "1. 查看指定供应商统计"
@@ -1749,15 +1754,23 @@ show_provider_stats_menu() {
         read -r choice
 
         case $choice in
-            1)  echo -ne "\n请输入供应商名称(参考上方列表): "
-                read -r provider_name
-                if [ -n "$provider_name" ]; then
-                    show_provider_stats "$provider_name" "$log_file"
+            1)  if [ ! -f "$log_file" ] || [ ! -s "$log_file" ]; then
+                    log "ERROR" "请先运行选项2进行节点分析"
                 else
-                    log "ERROR" "供应商名称不能为空"
+                    echo -ne "\n请输入供应商名称(参考上方列表): "
+                    read -r provider_name
+                    if [ -n "$provider_name" ]; then
+                        show_provider_stats "$provider_name" "$log_file"
+                    else
+                        log "ERROR" "供应商名称不能为空"
+                    fi
                 fi
                 ;;
-            2)  show_top_providers "$log_file"
+            2)  if [ ! -f "$log_file" ] || [ ! -s "$log_file" ]; then
+                    log "ERROR" "请先运行选项2进行节点分析"
+                else
+                    show_top_providers "$log_file"
+                fi
                 ;;
             0)  break
                 ;;
