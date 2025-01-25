@@ -1733,56 +1733,66 @@ generate_report() {
         # 最优部署建议
         echo -e "${CYAN}【最优部署建议】${NC}"
         echo
-        printf "%-35s | %-20s | %10s | %11s\n" "机房" "供应商" "节点数" "平均延迟"
+        printf "%-35s | %-17s | %8s | %10s\n" "机房" "供应商" "节点数" "平均延迟"
         echo "----------------------------------------------------------------------------------------------"
         
         if [ -r "${RESULTS_FILE}" ]; then
             awk -F'|' '
             {
-                dc=$3;
-                provider=$2;
-                latency=$4;
-                dcs[dc]++;
-                dc_latencies[dc]+=latency;
-                if (!(dc in dc_providers)) dc_providers[dc]=provider;
-                else if (index(dc_providers[dc], provider) == 0) {
-                    dc_providers[dc]=dc_providers[dc] ", " provider;
-                }
+                dc = $3;
+                provider = $2;
+                latency = $4;
+                
+                # 统计每个机房的总节点数和总延迟
+                dc_count[dc]++;
+                dc_latency[dc] += latency;
+                
+                # 统计每个机房中每个供应商的节点数
+                provider_count[dc,provider]++;
             }
+            
             END {
-                # 计算综合得分
-                for (dc in dcs) {
-                    avg_latency = dc_latencies[dc]/dcs[dc];
-                    score[dc] = (dcs[dc] * 0.7) - (avg_latency * 0.3);
+                # 首先对机房进行排序（按节点数）
+                n = 0;
+                for (dc in dc_count) {
+                    dcs[n++] = dc;
                 }
                 
-                # 排序
-                n = 0;
-                for (dc in dcs) sorted[n++] = dc;
+                # 冒泡排序机房（按节点数降序）
                 for (i = 0; i < n - 1; i++) {
                     for (j = i + 1; j < n; j++) {
-                        if (score[sorted[i]] < score[sorted[j]]) {
-                            temp = sorted[i];
-                            sorted[i] = sorted[j];
-                            sorted[j] = temp;
+                        if (dc_count[dcs[i]] < dc_count[dcs[j]]) {
+                            temp = dcs[i];
+                            dcs[i] = dcs[j];
+                            dcs[j] = temp;
                         }
                     }
                 }
                 
-                # 输出前3个最优机房
+                # 输出前3个机房
                 for (i = 0; i < 3 && i < n; i++) {
-                    dc = sorted[i];
-                    avg_latency = dc_latencies[dc]/dcs[dc];
-                    printf "%-35s | %-20s | %10d | %11.2f ms\n",
-                           dc, substr(dc_providers[dc], 1, 20),
-                           dcs[dc], avg_latency;
+                    dc = dcs[i];
+                    avg_latency = dc_latency[dc]/dc_count[dc];
+                    
+                    # 找出该机房最大的供应商
+                    max_count = 0;
+                    max_provider = "";
+                    for (key in provider_count) {
+                        split(key, parts, SUBSEP);
+                        if (parts[1] == dc && provider_count[key] > max_count) {
+                            max_count = provider_count[key];
+                            max_provider = parts[2];
+                        }
+                    }
+                    
+                    printf "%-35s | %-17s | %8d | %10.2f ms\n", 
+                           dc, max_provider, dc_count[dc], avg_latency;
                 }
             }' "${RESULTS_FILE}"
         else
             echo "无有效数据"
         fi
-        
-        echo
+        echo        
         echo -e "${YELLOW}部署策略建议：${NC}"
         echo "1. 选择节点数量较多的机房，这表明该位置已经过其他验证者验证"
         echo "2. 优先考虑平均延迟较低的机房"
