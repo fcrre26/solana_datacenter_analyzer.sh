@@ -1509,6 +1509,13 @@ get_validators() {
 generate_report() {
     log "INFO" "正在生成分析报告..."
     
+    # 创建临时文件
+    local temp_report="${TEMP_DIR}/temp_report.txt"
+    
+    # 创建报告目录
+    mkdir -p "${REPORT_DIR}"
+
+    
     {
         echo "===================================================================================="
         echo "                         Solana 验证者节点分布分析报告"
