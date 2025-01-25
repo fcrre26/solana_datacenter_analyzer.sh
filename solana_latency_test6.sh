@@ -1641,84 +1641,93 @@ END {
         
         echo
     # 机房分布统计部分
-    echo "机房分布统计"
-    echo "----------------------------------------------------------------------------------------------"
-    echo "主要机房分布 (Top 20):"
-    echo
-    echo "机房                              | 供应商                           | 节点数 |    平均延迟"
-    echo "----------------------------------------------------------------------------------------------"
-    
-    # 使用 awk 处理并按供应商节点数排序
-    awk -F'|' '
+  # 机房分布统计
     {
-        location = $3
-        provider = $2
-        latency = $4
+        echo "机房分布统计"
+        echo "----------------------------------------------------------------------------------------------"
+        echo "主要机房分布 (Top 20):"
+        echo
+        echo "机房                              | 供应商                           | 节点数 |    平均延迟"
+        echo "----------------------------------------------------------------------------------------------"
         
-        # 统计数据
-        locations[location]++
-        provider_count[location, provider]++
-        total_latency[location] += latency
-    }
-    END {
-        # 对每个位置处理供应商信息
-        for (loc in locations) {
-            # 收集该位置的所有供应商
-            delete providers
-            pcount = 0
-            for (key in provider_count) {
-                split(key, arr, SUBSEP)
-                if (arr[1] == loc) {
-                    providers[pcount++] = arr[2] "(" provider_count[key] ")"
-                    counts[pcount-1] = provider_count[key]
-                }
-            }
+        # 使用 awk 处理并按节点数排序
+        awk -F'|' '
+        {
+            location = $3
+            provider = $2
+            latency = $4
             
-            # 冒泡排序（按节点数降序）
-            for (i = 0; i < pcount-1; i++) {
-                for (j = 0; j < pcount-i-1; j++) {
-                    if (counts[j] < counts[j+1]) {
-                        # 交换节点数
-                        temp = counts[j]
-                        counts[j] = counts[j+1]
-                        counts[j+1] = temp
-                        # 交换供应商信息
-                        temp = providers[j]
-                        providers[j] = providers[j+1]
-                        providers[j+1] = temp
-                    }
-                }
-            }
+            # 统计数据
+            locations[location]++
+            total_latency[location] += latency
             
-            # 格式化供应商字符串
-            provider_str = ""
-            for (i = 0; i < pcount; i++) {
-                if (i > 0) provider_str = provider_str ", "
-                provider_str = provider_str providers[i]
+            # 更新供应商统计
+            if (!(location SUBSEP provider) in providers) {
+                provider_count[location,provider] = 1
+                providers[location,provider] = provider "(" provider_count[location,provider] ")"
+            } else {
+                provider_count[location,provider]++
+                providers[location,provider] = provider "(" provider_count[location,provider] ")"
             }
-            
-            # 输出第一行
-            printf "%-35s | %-35.35s |%8d |%13.2f ms\n", 
-                substr(loc, 1, 35),
-                substr(provider_str, 1, 35),
-                locations[loc],
-                total_latency[loc]/locations[loc]
-            
-            # 如果供应商信息太长，继续输出
-            if (length(provider_str) > 35) {
-                remain = provider_str
-                while (length(remain) > 35) {
-                    remain = substr(remain, 36)
-                    printf "%35s | %-35.35s |\n", "", substr(remain, 1, 35)
-                    if (length(remain) <= 35) {
-                        printf "%35s | %-35s |\n", "", remain
-                    }
-                }
-            }
-            print "----------------------------------------------------------------------------------------------"
         }
-    }' "${RESULTS_FILE}" | sort -t'|' -k3,3nr | head -n 100 >> "${LATEST_REPORT}"
-
+        END {
+            # 对位置按节点数排序
+            n = 0
+            for (loc in locations) {
+                sorted_locs[++n] = loc
+            }
+            for (i = 1; i <= n; i++) {
+                for (j = i + 1; j <= n; j++) {
+                    if (locations[sorted_locs[i]] < locations[sorted_locs[j]]) {
+                        temp = sorted_locs[i]
+                        sorted_locs[i] = sorted_locs[j]
+                        sorted_locs[j] = temp
+                    }
+                }
+            }
+            
+            # 输出前20个位置的统计信息
+            for (i = 1; i <= (n > 20 ? 20 : n); i++) {
+                loc = sorted_locs[i]
+                
+                # 收集该位置的所有供应商信息
+                provider_str = ""
+                for (key in providers) {
+                    split(key, arr, SUBSEP)
+                    if (arr[1] == loc) {
+                        if (provider_str == "") {
+                            provider_str = providers[key]
+                        } else {
+                            provider_str = provider_str ", " providers[key]
+                        }
+                    }
+                }
+                
+                # 输出格式化的统计信息
+                printf "%-35s | %-35.35s | %6d | %11.2f ms\n",
+                    substr(loc, 1, 35),
+                    substr(provider_str, 1, 35),
+                    locations[loc],
+                    total_latency[loc]/locations[loc]
+                
+                # 如果供应商信息太长，继续输出
+                if (length(provider_str) > 35) {
+                    remain = provider_str
+                    while (length(remain) > 35) {
+                        remain = substr(remain, 36)
+                        printf "%35s | %-35.35s |\n", "", substr(remain, 1, 35)
+                        if (length(remain) <= 35) {
+                            printf "%35s | %-35s |\n", "", remain
+                        }
+                    }
+                }
+                print "----------------------------------------------------------------------------------------------"
+            }
+        }
+        ' "${RESULTS_FILE}" | sort -t'|' -k3,3nr | head -n 100
+        
+        echo
+    } >> "${LATEST_REPORT}"
 
         echo
         echo "【最优部署建议】"
