@@ -1636,46 +1636,47 @@ generate_report() {
         END {
             # 对每个位置进行处理
             for(loc in locations) {
-                # 创建临时数组存储该位置的供应商信息
-                delete temp_providers
-                provider_count = 0
+                # 创建供应商数组
+                delete providers
+                n = 0
                 
                 # 收集该位置的所有供应商信息
                 for(key in provider_count) {
                     split(key, arr, SUBSEP)
                     if(arr[1] == loc) {
-                        temp_providers[arr[2]] = provider_count[key]
-                        provider_count++
+                        name = arr[2]
+                        count = provider_count[key]
+                        provider_array[n]["name"] = name
+                        provider_array[n]["count"] = count
+                        n++
                     }
                 }
                 
-                # 创建排序数组
-                n = 0
-                for(p in temp_providers) {
-                    sorted_providers[++n] = p
-                }
-                
-                # 根据节点数排序（降序）
-                for(i = 1; i < n; i++) {
-                    for(j = i + 1; j <= n; j++) {
-                        if(temp_providers[sorted_providers[i]] < temp_providers[sorted_providers[j]]) {
-                            temp = sorted_providers[i]
-                            sorted_providers[i] = sorted_providers[j]
-                            sorted_providers[j] = temp
+                # 冒泡排序，按节点数降序
+                for(i = 0; i < n-1; i++) {
+                    for(j = 0; j < n-i-1; j++) {
+                        if(provider_array[j]["count"] < provider_array[j+1]["count"]) {
+                            # 交换名称
+                            temp_name = provider_array[j]["name"]
+                            provider_array[j]["name"] = provider_array[j+1]["name"]
+                            provider_array[j+1]["name"] = temp_name
+                            
+                            # 交换数量
+                            temp_count = provider_array[j]["count"]
+                            provider_array[j]["count"] = provider_array[j+1]["count"]
+                            provider_array[j+1]["count"] = temp_count
                         }
                     }
                 }
                 
-                # 构建供应商字符串
+                # 构建排序后的供应商字符串
                 provider_str = ""
-                for(i = 1; i <= n; i++) {
-                    provider_name = sorted_providers[i]
-                    count = temp_providers[provider_name]
-                    if(i > 1) provider_str = provider_str ", "
-                    provider_str = provider_str provider_name "(" count ")"
+                for(i = 0; i < n; i++) {
+                    if(i > 0) provider_str = provider_str ", "
+                    provider_str = provider_str provider_array[i]["name"] "(" provider_array[i]["count"] ")"
                 }
                 
-                # 输出格式化的统计信息
+                # 输出结果
                 printf "%s|%s|%d|%.2f\n", 
                     loc,
                     provider_str,
@@ -1720,13 +1721,7 @@ generate_report() {
         
     } > "$temp_report"
     
-    # 移动临时报告到最终位置
-    mv "$temp_report" "${LATEST_REPORT}"
-    
-    log "SUCCESS" "报告已生成: ${LATEST_REPORT}"
-}
-
-    # 保存无颜色版本的报告（移除ANSI颜色代码）
+    # 保存无颜色版本的报告
     sed 's/\x1b\[[0-9;]*m//g' "$temp_report" > "${LATEST_REPORT}"
     
     # 清理临时文件
