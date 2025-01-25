@@ -1534,22 +1534,32 @@ generate_report() {
         }
     }' "${results_file}" | sort -t'|' -k2,2nr)
     
-    # 统计机房数据
-    local location_stats=$(awk -F'|' '
-    NF == 4 && $4 ~ /^[0-9]+(\.[0-9]+)?$/ {
-        loc_key = $3"|"$2
-        loc_count[loc_key]++
-        latency[loc_key]+=$4
-    } 
-    END {
-        for(lk in loc_count) {
-            split(lk, arr, "|")
-            location = arr[1]
-            provider = arr[2]
-            avg_latency = latency[lk]/loc_count[lk]
-            printf "%s|%s|%d|%.2f\n", location, provider, loc_count[lk], avg_latency
+   # 统计机房数据
+local location_stats=$(awk -F'|' '
+{
+    location=$3
+    provider=$2
+    locations[location]++
+    provider_in_loc[location,provider]++
+    latency_sum[location]+=$4
+    total_nodes++
+}
+END {
+    # 计算每个位置的数据
+    for(loc in locations) {
+        # 收集该位置的所有供应商信息
+        provider_info = ""
+        for(key in provider_in_loc) {
+            split(key, arr, SUBSEP)
+            if(arr[1] == loc) {
+                if(provider_info != "") provider_info = provider_info ", "
+                provider_info = provider_info arr[2] "(" provider_in_loc[key] ")"
+            }
         }
-    }' "${results_file}" | sort -t'|' -k3,3nr)
+        avg_latency = latency_sum[loc]/locations[loc]
+        printf "%s|%s|%d|%.2f\n", loc, provider_info, locations[loc], avg_latency
+    }
+}' "${results_file}" | sort -t'|' -k3,3nr)
     
     # 统计最近的20个节点
     local nearest_nodes=$(awk -F'|' '
