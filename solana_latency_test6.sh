@@ -1507,241 +1507,199 @@ get_validators() {
 
 # 生成分析报告
 generate_report() {
-    local temp_report="${TEMP_DIR}/temp_report.txt"
-    local results_file="${RESULTS_FILE}"
-    
-    if [ ! -f "${results_file}" ]; then
-        log "ERROR" "结果文件不存在，无法生成报告"
-        return 1
-    fi
-    
     log "INFO" "正在生成分析报告..."
-    
-    # 统计供应商数据
-    local provider_stats=$(awk -F'|' '
-    NF == 4 && $4 ~ /^[0-9]+(\.[0-9]+)?$/ {
-        provider[$2]++
-        latency[$2]+=$4
-        if($4 <= 300) available[$2]++
-        total_nodes++
-    } 
-    END {
-        for(p in provider) {
-            avg_latency = latency[p]/provider[p]
-            avail_rate = (available[p]/provider[p])*100
-            share = (provider[p]/total_nodes)*100
-            printf "%s|%d|%.1f|%.2f|%.1f\n", p, provider[p], share, avg_latency, avail_rate
-        }
-    }' "${results_file}" | sort -t'|' -k2,2nr)
-
-    # 统计机房数据
-local location_stats=$(awk -F'|' '
-{
-    location=$3
-    provider=$2
-    latency=$4
-    locations[location]++
-    provider_in_loc[location,provider]++
-    latency_sum[location]+=$4
-    total_nodes++
-}
-END {
-    # 计算每个位置的数据
-    for(loc in locations) {
-        # 收集该位置的所有供应商信息
-        provider_info = ""
-        provider_count = 0
-        for(key in provider_in_loc) {
-            split(key, arr, SUBSEP)
-            if(arr[1] == loc) {
-                if(provider_info != "") provider_info = provider_info ", "
-                provider_info = provider_info arr[2] "(" provider_in_loc[key] ")"
-                provider_count += provider_in_loc[key]
-            }
-        }
-        avg_latency = latency_sum[loc]/locations[loc]
-        printf "%s|%s|%d|%.2f\n", loc, provider_info, provider_count, avg_latency
-    }
-}' "${results_file}" | sort -t'|' -k3,3nr)
- 
-   
-    # 统计最近的20个节点
-    local nearest_nodes=$(awk -F'|' '
-    NF == 4 && $4 ~ /^[0-9]+(\.[0-9]+)?$/ {
-        printf "%s|%s|%s|%.2f\n", $1, $2, $3, $4
-    }' "${results_file}" | sort -t'|' -k4,4n | head -20)
     
     {
         echo "===================================================================================="
         echo "                         Solana 验证者节点分布分析报告"
         echo "===================================================================================="
         echo
+        
+        # 最近的验证者节点 TOP 20
         echo "【距离最近的验证者节点 (TOP 20)】"
         echo "------------------------------------------------------------------------------------"
-        printf "%-18s | %-26s | %-32s | %15s\n" \
-            "IP地址" "供应商" "数据中心" "延迟(ms)"
+        echo "IP地址           | 供应商                  | 数据中心                     |      延迟(ms)"
         echo "------------------------------------------------------------------------------------"
         
-        echo "$nearest_nodes" | while IFS='|' read -r ip provider location latency; do
-            printf "%-15s | %-20s | %-25s | %15.2f\n" \
-                "$ip" "${provider:0:20}" "${location:0:25}" "$latency"
-        done
-        
+        # 排序并显示最近的20个节点
+        sort -t'|' -k4,4n "${RESULTS_FILE}" | head -n 20 | \
+        awk -F'|' '{printf "%-15s | %-22s | %-27s | %13.2f\n", $1, $2, $3, $4}'
         echo
+        
+        # 延迟分布分析
         echo "【延迟分布分析】"
         echo "------------------------------------------------------------------------------------"
-        echo "$nearest_nodes" | awk -F'|' '
-        BEGIN {
-            count=0
-            total=0
-            min=999999
-            max=0
-        }
+        awk -F'|' '
+        BEGIN {min=999999; max=0; sum=0; count=0}
         {
-            latency=$4
-            total+=latency
-            count++
-            if(latency < min) min=latency
-            if(latency > max) max=latency
+            if ($4 != "timeout" && $4 != "") {
+                if ($4 < min) min = $4
+                if ($4 > max) max = $4
+                sum += $4
+                count++
+            }
         }
         END {
-            if(count > 0) {
-                avg=total/count
-                printf "最低延迟: %15.2f ms\n", min
-                printf "最高延迟: %15.2f ms\n", max
-                printf "平均延迟: %15.2f ms\n", avg
-                printf "样本数量: %15d\n", count
-            }
-        }'
-        
+            printf "最低延迟: %12.2f ms\n", min
+            printf "最高延迟: %12.2f ms\n", max
+            printf "平均延迟: %12.2f ms\n", sum/count
+            printf "样本数量: %12d\n", count
+        }' "${RESULTS_FILE}"
         echo
+        
+        # 供应商分布统计
         echo "【供应商分布统计】"
         echo "----------------------------------------------------------------------------------------------"
-        
-        # 读取主导供应商信息
-        local top_info=$(echo "$provider_stats" | head -n1)
-        local top_provider=$(echo "$top_info" | cut -d'|' -f1)
-        local top_count=$(echo "$top_info" | cut -d'|' -f2)
-        local top_share=$(echo "$top_info" | cut -d'|' -f3)
-        
-        echo "主导供应商: ${top_provider}"
-        echo "节点数量: ${top_count} (占比: ${top_share}%)"
+        awk -F'|' '
+        {
+            provider = $2
+            latency = $4
+            providers[provider]++
+            if (latency != "timeout" && latency != "") {
+                latency_sum[provider] += latency
+                available[provider]++
+            }
+            total++
+        }
+        END {
+            # 找出主导供应商
+            max_nodes = 0
+            main_provider = ""
+            for (p in providers) {
+                if (providers[p] > max_nodes) {
+                    max_nodes = providers[p]
+                    main_provider = p
+                }
+            }
+            
+            printf "主导供应商: %s\n", main_provider
+            printf "节点数量: %d (占比: %.1f%%)\n\n", max_nodes, (max_nodes/total)*100
+            
+            print "供应商排名 (Top 20):"
+            print "----------------------------------------------------------------------------------------------"
+            printf "%-24s | %7s | %15s | %18s | %11s\n", 
+                "供应商", "节点数", "占比", "平均延迟", "可用率"
+            print "----------------------------------------------------------------------------------------------"
+            
+            # 输出排序后的供应商统计
+            for (p in providers) {
+                printf "%s|%d|%.1f|%.2f|%.1f\n",
+                    p,
+                    providers[p],
+                    (providers[p]/total)*100,
+                    (available[p] > 0 ? latency_sum[p]/available[p] : 999),
+                    (available[p]/providers[p])*100
+            }
+        }' "${RESULTS_FILE}" | sort -t'|' -k2,2nr | head -n 20 | \
+        awk -F'|' '{printf "%-24s | %7d | %14.1f%% | %17.2f ms | %10.1f%%\n", $1, $2, $3, $4, $5}'
         echo
         
-        echo "供应商排名 (Top 20):"
-        echo "----------------------------------------------------------------------------------------------"
-        printf "%-28s | %8s | %18s | %25s | %15s\n" \
-            "供应商" "节点数" "占比" "平均延迟" "可用率"
-        echo "----------------------------------------------------------------------------------------------"
-        
-        echo "$provider_stats" | head -20 | while IFS='|' read -r provider count share latency avail; do
-            printf "%-25s | %8d | %15.1f%% | %15.2f ms | %15.1f%%\n" \
-                "${provider:0:25}" "$count" "$share" "$latency" "$avail"
-        done
-        
-        echo
-    # 机房分布统计部分
-  # 机房分布统计
-    {
-        echo "机房分布统计"
+        # 机房分布统计
+        echo "【机房分布统计】"
         echo "----------------------------------------------------------------------------------------------"
         echo "主要机房分布 (Top 20):"
         echo
         echo "机房                              | 供应商                           | 节点数 |    平均延迟"
         echo "----------------------------------------------------------------------------------------------"
         
-        # 使用 awk 处理并按节点数排序
         awk -F'|' '
         {
             location = $3
             provider = $2
             latency = $4
             
-            # 统计数据
-            locations[location]++
+            count[location]++
             total_latency[location] += latency
             
             # 更新供应商统计
-            if (!(location SUBSEP provider) in providers) {
-                provider_count[location,provider] = 1
-                providers[location,provider] = provider "(" provider_count[location,provider] ")"
-            } else {
-                provider_count[location,provider]++
-                providers[location,provider] = provider "(" provider_count[location,provider] ")"
-            }
+            provider_count[location,provider]++
         }
         END {
-            # 对位置按节点数排序
-            n = 0
-            for (loc in locations) {
-                sorted_locs[++n] = loc
-            }
-            for (i = 1; i <= n; i++) {
-                for (j = i + 1; j <= n; j++) {
-                    if (locations[sorted_locs[i]] < locations[sorted_locs[j]]) {
-                        temp = sorted_locs[i]
-                        sorted_locs[i] = sorted_locs[j]
-                        sorted_locs[j] = temp
-                    }
-                }
-            }
-            
-            # 输出前20个位置的统计信息
-            for (i = 1; i <= (n > 20 ? 20 : n); i++) {
-                loc = sorted_locs[i]
-                
-                # 收集该位置的所有供应商信息
-                provider_str = ""
-                for (key in providers) {
+            # 对每个位置处理供应商信息
+            for (loc in count) {
+                # 创建临时数组存储该位置的供应商信息
+                delete temp_providers
+                for (key in provider_count) {
                     split(key, arr, SUBSEP)
                     if (arr[1] == loc) {
-                        if (provider_str == "") {
-                            provider_str = providers[key]
-                        } else {
-                            provider_str = provider_str ", " providers[key]
-                        }
+                        temp_providers[arr[2]] = provider_count[key]
+                    }
+                }
+                
+                # 对供应商按节点数排序
+                provider_list = ""
+                n = asorti(temp_providers, sorted_providers, "@val_num_desc")
+                for (i = 1; i <= n; i++) {
+                    provider = sorted_providers[i]
+                    if (provider_list == "") {
+                        provider_list = provider "(" temp_providers[provider] ")"
+                    } else {
+                        provider_list = provider_list ", " provider "(" temp_providers[provider] ")"
                     }
                 }
                 
                 # 输出格式化的统计信息
-                printf "%-35s | %-35.35s | %6d | %11.2f ms\n",
-                    substr(loc, 1, 35),
-                    substr(provider_str, 1, 35),
-                    locations[loc],
-                    total_latency[loc]/locations[loc]
-                
-                # 如果供应商信息太长，继续输出
-                if (length(provider_str) > 35) {
-                    remain = provider_str
-                    while (length(remain) > 35) {
-                        remain = substr(remain, 36)
-                        printf "%35s | %-35.35s |\n", "", substr(remain, 1, 35)
-                        if (length(remain) <= 35) {
-                            printf "%35s | %-35s |\n", "", remain
-                        }
-                    }
-                }
-                print "----------------------------------------------------------------------------------------------"
+                printf "%s|%s|%d|%.2f\n", 
+                    loc,
+                    provider_list,
+                    count[loc],
+                    total_latency[loc]/count[loc]
             }
-        }
-        ' "${RESULTS_FILE}" | sort -t'|' -k3,3nr | head -n 100
+        }' "${RESULTS_FILE}" | sort -t'|' -k3,3nr | head -n 20 | \
+        while IFS='|' read -r loc providers count latency; do
+            printf "%-35s | %-35.35s | %6d | %11.2f ms\n" "$loc" "$providers" "$count" "$latency"
+            
+            # 如果供应商列表太长，处理换行
+            if [ ${#providers} -gt 35 ]; then
+                remaining="${providers:35}"
+                while [ ${#remaining} -gt 0 ]; do
+                    printf "%35s | %-35.35s |\n" "" "${remaining:0:35}"
+                    remaining="${remaining:35}"
+                done
+            fi
+            echo "----------------------------------------------------------------------------------------------"
+        done
         
-        echo
-    } >> "${LATEST_REPORT}"
-
         echo
         echo "【最优部署建议】"
         echo
-        printf "%-38s | %-20s | %13s | %15s\n" \
-            "机房" "供应商" "节点数" "平均延迟"
+        echo "机房                                 | 供应商            |     节点数 |    平均延迟"
         echo "----------------------------------------------------------------------------------------------"
         
-        # 选择节点数量最多的前3个机房作为建议
-        echo "$location_stats" | sort -t'|' -k3,3nr | head -3 | \
-            while IFS='|' read -r location provider count latency; do
-                printf "%-35s | %-20s | %8d | %15.2f ms\n" \
-                    "${location:0:35}" "${provider:0:20}" "$count" "$latency"
-            done
+        # 选择前3个最优机房（按节点数和延迟综合排序）
+        awk -F'|' '
+        {
+            location = $3
+            provider = $2
+            latency = $4
+            
+            count[location]++
+            total_latency[location] += latency
+            if (!(location SUBSEP provider) in providers) {
+                providers[location,provider] = 1
+                provider_list[location] = provider "(" providers[location,provider] ")"
+            } else {
+                providers[location,provider]++
+                provider_list[location] = provider_list[location] ", " provider "(" providers[location,provider] ")"
+            }
+        }
+        END {
+            for (loc in count) {
+                avg_latency = total_latency[loc]/count[loc]
+                printf "%s|%s|%d|%.2f\n", 
+                    loc,
+                    provider_list[loc],
+                    count[loc],
+                    avg_latency
+            }
+        }' "${RESULTS_FILE}" | sort -t'|' -k3,3nr | head -n 3 | \
+        awk -F'|' '{
+            printf "%-35s | %-15.15s |%11d | %13.2f ms\n", 
+            $1, 
+            substr($2, 1, index($2, "(")-1),
+            $3, 
+            $4
+        }'
         
         echo
         echo "部署策略建议："
@@ -1751,7 +1709,10 @@ END {
         echo "4. 定期进行延迟测试和性能监控"
         echo "5. 考虑成本因素，不同地区和供应商的价格差异较大"
         
-    } > "$temp_report"
+    } > "${LATEST_REPORT}"
+    
+    log "SUCCESS" "报告已生成: ${LATEST_REPORT}"
+}
 
     # 保存无颜色版本的报告
     sed 's/\x1b\[[0-9;]*m//g' "$temp_report" > "${LATEST_REPORT}"
