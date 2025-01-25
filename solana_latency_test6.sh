@@ -1600,72 +1600,90 @@ generate_report() {
         }' "${RESULTS_FILE}" | sort -t'|' -k2,2nr | head -n 20 | \
         awk -F'|' '{printf "%-24s | %7d | %14.1f%% | %17.2f ms | %10.1f%%\n", $1, $2, $3, $4, $5}'
         echo
+        # 机房分布统计部分
+echo "【机房分布统计】"
+echo "----------------------------------------------------------------------------------------------"
+echo "主要机房分布 (Top 20):"
+echo
+echo "机房                              | 供应商                           | 节点数 |    平均延迟"
+echo "----------------------------------------------------------------------------------------------"
+
+awk -F'|' '
+{
+    location = $3
+    provider = $2
+    latency = $4
+    
+    # 统计数据
+    locations[location]++
+    total_latency[location] += latency
+    provider_count[location,provider]++
+}
+END {
+    # 对每个位置处理供应商信息
+    for (loc in locations) {
+        # 创建临时数组存储该位置的供应商信息
+        delete temp_providers
+        delete sorted_providers
+        provider_str = ""
         
-        # 机房分布统计
-        echo "【机房分布统计】"
-        echo "----------------------------------------------------------------------------------------------"
-        echo "主要机房分布 (Top 20):"
-        echo
-        echo "机房                              | 供应商                           | 节点数 |    平均延迟"
-        echo "----------------------------------------------------------------------------------------------"
-        
-        awk -F'|' '
-        {
-            location = $3
-            provider = $2
-            latency = $4
-            
-            count[location]++
-            total_latency[location] += latency
-            
-            # 更新供应商统计
-            provider_count[location,provider]++
-        }
-        END {
-            # 对每个位置处理供应商信息
-            for (loc in count) {
-                # 创建临时数组存储该位置的供应商信息
-                delete temp_providers
-                for (key in provider_count) {
-                    split(key, arr, SUBSEP)
-                    if (arr[1] == loc) {
-                        temp_providers[arr[2]] = provider_count[key]
-                    }
-                }
-                
-                # 对供应商按节点数排序
-                provider_list = ""
-                n = asorti(temp_providers, sorted_providers, "@val_num_desc")
-                for (i = 1; i <= n; i++) {
-                    provider = sorted_providers[i]
-                    if (provider_list == "") {
-                        provider_list = provider "(" temp_providers[provider] ")"
-                    } else {
-                        provider_list = provider_list ", " provider "(" temp_providers[provider] ")"
-                    }
-                }
-                
-                # 输出格式化的统计信息
-                printf "%s|%s|%d|%.2f\n", 
-                    loc,
-                    provider_list,
-                    count[loc],
-                    total_latency[loc]/count[loc]
+        # 收集该位置的所有供应商信息
+        for (key in provider_count) {
+            split(key, arr, SUBSEP)
+            if (arr[1] == loc) {
+                temp_providers[arr[2]] = provider_count[key]
             }
-        }' "${RESULTS_FILE}" | sort -t'|' -k3,3nr | head -n 20 | \
-        while IFS='|' read -r loc providers count latency; do
-            printf "%-35s | %-35.35s | %6d | %11.2f ms\n" "$loc" "$providers" "$count" "$latency"
-            
-            # 如果供应商列表太长，处理换行
-            if [ ${#providers} -gt 35 ]; then
-                remaining="${providers:35}"
-                while [ ${#remaining} -gt 0 ]; do
-                    printf "%35s | %-35.35s |\n" "" "${remaining:0:35}"
-                    remaining="${remaining:35}"
-                done
-            fi
-            echo "----------------------------------------------------------------------------------------------"
+        }
+        
+        # 对供应商按节点数排序
+        n = 0
+        for (p in temp_providers) {
+            sorted_providers[++n] = p
+        }
+        
+        # 冒泡排序，按节点数降序
+        for (i = 1; i <= n; i++) {
+            for (j = i + 1; j <= n; j++) {
+                if (temp_providers[sorted_providers[i]] < temp_providers[sorted_providers[j]]) {
+                    temp = sorted_providers[i]
+                    sorted_providers[i] = sorted_providers[j]
+                    sorted_providers[j] = temp
+                }
+            }
+        }
+        
+        # 构建排序后的供应商字符串
+        for (i = 1; i <= n; i++) {
+            provider = sorted_providers[i]
+            if (provider_str == "") {
+                provider_str = provider "(" temp_providers[provider] ")"
+            } else {
+                provider_str = provider_str ", " provider "(" temp_providers[provider] ")"
+            }
+        }
+        
+        # 输出格式化的统计信息
+        printf "%s|%s|%d|%.2f\n", 
+            loc,
+            provider_str,
+            locations[loc],
+            total_latency[loc]/locations[loc]
+    }
+}' "${RESULTS_FILE}" | sort -t'|' -k3,3nr | head -n 20 | \
+while IFS='|' read -r loc providers count latency; do
+    printf "%-35s | %-35.35s | %6d | %11.2f ms\n" "$loc" "$providers" "$count" "$latency"
+    
+    # 如果供应商列表太长，处理换行
+    if [ ${#providers} -gt 35 ]; then
+        remaining="${providers:35}"
+        while [ ${#remaining} -gt 0 ]; do
+            printf "%35s | %-35.35s |\n" "" "${remaining:0:35}"
+            remaining="${remaining:35}"
         done
+    fi
+    echo "----------------------------------------------------------------------------------------------"
+done
+
         
         echo
         echo "【最优部署建议】"
